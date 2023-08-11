@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Form</class>
+ <widget class="QWidget" name="Form">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>852</width>
+    <height>448</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <layout class="QGridLayout" name="gridLayout">
+   <item row="0" column="0">
+    <widget class="QLabel" name="selectedPlayerLabel">
+     <property name="text">
+      <string>Currently Up for Auction</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item row="0" column="1">
+    <widget class="QLabel" name="draftBoardLabel">
+     <property name="text">
+      <string>Draft Board</string>
+     </property>
+     <property name="scaledContents">
+      <bool>true</bool>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item row="2" column="2">
+    <widget class="QLabel" name="optTeamLabel">
+     <property name="text">
+      <string>Optimal Team</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item row="1" column="2">
+    <widget class="QTableWidget" name="myTeamTable"/>
+   </item>
+   <item row="0" column="2">
+    <widget class="QLabel" name="myTeamLabel">
+     <property name="text">
+      <string>My Team</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item row="3" column="2">
+    <widget class="QTableWidget" name="optTeamTable"/>
+   </item>
+   <item row="1" column="1" rowspan="4">
+    <widget class="QTableWidget" name="draftBoard"/>
+   </item>
+   <item row="2" column="0" rowspan="3">
+    <widget class="QTableWidget" name="selectedPlayerTable"/>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
