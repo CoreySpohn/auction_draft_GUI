@@ -8,8 +8,10 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+# import statsmodels.api as sm
 from matplotlib.backends.backend_qt5agg import FigureCanvas
 from matplotlib.figure import Figure
+from moepy import lowess
 from ortools.linear_solver import pywraplp
 from PyQt5 import QtCore as qtc
 from PyQt5 import QtGui as qtg
@@ -48,11 +50,16 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.ui.setupUi(self)
 
         # Set up the plot
-        self.canvas = FigureCanvas(Figure(figsize=(5, 3)))
-        self.ax = self.canvas.figure.subplots()
-        self.ax.plot(np.linspace(0, 10), np.sin(np.linspace(0, 10)))
-        self.ui.gridLayout.addWidget(self.canvas, 1, 0, 1, 1)
-        # self.ui.set.addWidget(self.canvas, 1, 0, 1, 1)
+        self.oc_canvas = FigureCanvas(Figure(figsize=(5, 3)))
+        self.oc_ax = self.oc_canvas.figure.subplots()
+        self.ui.gridLayout.addWidget(self.oc_canvas, 1, 0, 1, 1)
+
+        # Set up position cost plots
+        self.p_canvas = FigureCanvas(Figure(figsize=(5, 5)))
+        self.pax = self.p_canvas.figure.subplots(ncols=2, nrows=2)
+        self.ui.gridLayout.addWidget(self.p_canvas, 3, 0, 1, 1)
+
+        # self.ui.set.addWidget(self.oc_canvas, 1, 0, 1, 1)
 
         self.teams = 10
         self.auction_budget = 300
@@ -85,6 +92,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             "Name": {"is_editable": False, "dtype": str},
             # "Position": {"is_editable": False, "dtype": str},
             "PPW": {"is_editable": False, "dtype": float},
+            "Projected price": {"is_editable": False, "dtype": float},
             "Auction value": {"is_editable": False, "dtype": float},
             "Draft price": {"is_editable": True, "dtype": int},
             "Drafted": {"is_editable": True, "dtype": int},
@@ -94,6 +102,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             "Position rank": int,
             "Name": str,
             "PPW": float,
+            "Projected price": float,
             "Auction value": float,
             "Draft price": int,
         }
@@ -102,6 +111,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             # "Position rank": int,
             "Name": str,
             "PPW": float,
+            "Projected price": float,
             "Auction value": float,
             "Draft price": int,
         }
@@ -136,6 +146,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.get_nfldata()
         self.calc_fantasy_points()
         self.calc_player_vorp()
+        self.get_historic_price_data()
         self.calc_player_price()
         self.populate_draft_board()
         self.init_team_table(self.ui.myTeamTable)
@@ -243,9 +254,9 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             if player_drafted == 2:
                 opt_money += player["Draft price"]
             else:
-                opt_money += player["Auction value"]
+                opt_money += int(player["Projected price"])
         self.ui.optTeamLabel.setText(
-            f"Optimal team: {current_ppw:.1f} for ${opt_money}"
+            f"Optimal team: {current_ppw:.1f} for ${opt_money:.0f}"
         )
 
     def init_team_table(self, table):
@@ -297,7 +308,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             if not column["is_editable"]:
                 self.ui.draftBoard.setItemDelegateForColumn(i, delegate)
 
-        sorted_players = self.draft_df.sort_values("Auction value", ascending=False)
+        # sorted_players = self.draft_df.sort_values("Auction value", ascending=False)
+        sorted_players = self.draft_df.sort_values("PPW", ascending=False)
         str_cols = ["Name", "Position"]
 
         cmap = plt.get_cmap("viridis")
@@ -325,7 +337,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 self.ui.draftBoard.item(i, j).setBackground(
                     qtg.QColor(position_colors[player_position])
                 )
-        self.ui.draftBoard.sortByColumn(2, qtc.Qt.DescendingOrder)
+        self.ui.draftBoard.sortByColumn(1, qtc.Qt.DescendingOrder)
 
     def on_selectionChanged(self, selected, deselected):
         # If name in players fill the selected player thing
@@ -349,6 +361,10 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
         column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
         self.draft_df.loc[player_df_row, column_name] = changed_number
+        self.calc_player_price()
+        # self.ui.draftBoard.cellChanged.disconnect()
+        # self.populate_draft_board()
+        # self.ui.draftBoard.cellChanged.connect(self.on_draftBoardChanged)
         self.update_my_team()
         self.update_opt_team()
 
@@ -487,16 +503,16 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 .index
             )
             _df.loc[bench_inds, "PlayerStatus"] = "Bench"
-            starter_vorp = pos_df["PPW"].values - starter_pos_replacement["PPW"]
-            bench_vorp = pos_df["PPW"].values - bench_pos_replacement["PPW"]
-            # starter_vorp = (
-            #     pos_df["FANTASY_POINTS"].values
-            #     - starter_pos_replacement["FANTASY_POINTS"]
-            # )
-            # bench_vorp = (
-            #     pos_df["FANTASY_POINTS"].values
-            #     - bench_pos_replacement["FANTASY_POINTS"]
-            # )
+            # starter_vorp = pos_df["PPW"].values - starter_pos_replacement["PPW"]
+            # bench_vorp = pos_df["PPW"].values - bench_pos_replacement["PPW"]
+            starter_vorp = (
+                pos_df["FANTASY_POINTS"].values
+                - starter_pos_replacement["FANTASY_POINTS"]
+            )
+            bench_vorp = (
+                pos_df["FANTASY_POINTS"].values
+                - bench_pos_replacement["FANTASY_POINTS"]
+            )
             _df.loc[pos_mask, "starter_VORP"] = starter_vorp
             _df.loc[pos_mask, "bench_VORP"] = bench_vorp
 
@@ -529,6 +545,31 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.draft_df["Drafted"] = np.zeros(self.draft_df.shape[0])
         self.draft_df["Draft price"] = np.zeros(self.draft_df.shape[0])
 
+    def get_historic_price_data(self):
+        poss = ["QB", "RB", "WR", "TE"]
+        self.draft_df["Projected price"] = np.ones(self.draft_df.shape[0])
+        self.league_position_data = {}
+        for pos in poss:
+            df = pd.read_csv(f".cache/herndon_2022/{pos}s.csv").fillna(1)
+            # p_df = df.loc[df["Paid"] > 1]
+            # excess_dollar_players = (p_df.Paid > 1).index
+            # x = p_df.loc[excess_dollar_players]["PTS"] / 16
+            # y = p_df.loc[excess_dollar_players]["Paid"]
+            x = df["PTS"].values / 17
+            y = df["Paid"].values
+            # model = lowess.Lowess()
+            # model.fit(x.values, y.values, frac=0.5)
+            total_spend = df.Paid.sum()
+            # percent_spend = total_spend / self.available_budget
+            self.league_position_data[pos] = {
+                "hist_spend": total_spend,
+                "hist_ppw": x,
+                "hist_price": y,
+                "curr_spend": 0,
+                "curr_ppw": None,
+                "curr_price": None,
+            }
+
     def calc_player_price(self):
         # Calculate the remaining excess dollars
         players_rostered = self.my_rostered_players + self.league_rostered_players
@@ -547,6 +588,101 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         av = self.draft_df.loc[value_mask, "VORP"].values * edpv
         av[av <= 0] = 1
         self.draft_df.loc[value_mask, "Auction value"] = np.round(av)
+
+        poss = ["QB", "RB", "WR", "TE"]
+        cmap = plt.get_cmap("viridis")
+        position_colors = [cmap(val) for val in np.linspace(0, 0.99, 4)]
+        self.draft_df["Projected price"] = np.ones(self.draft_df.shape[0])
+        for pos, ax, color in zip(poss, self.pax.flatten(), position_colors):
+            ax.clear()
+            pos_data = self.league_position_data[pos]
+            hist_ppw = pos_data["hist_ppw"]
+            hist_price = pos_data["hist_price"]
+            # draft_vals = self.draft_df.loc[self.draft_df.Position == pos]["PPW"].values
+            pos_inds = self.draft_df.loc[self.draft_df.Position == pos].index
+            undrafted = self.draft_df.loc[pos_inds].loc[self.draft_df.Drafted == 0]
+            undrafted_inds = undrafted.index
+            drafted = self.draft_df.loc[pos_inds].loc[self.draft_df.Drafted != 0]
+            model = lowess.Lowess()
+            use_hist_point = np.ones(len(hist_ppw), dtype=bool)
+            if drafted.empty:
+                model.fit(hist_ppw, hist_price, frac=0.5)
+            else:
+                # remove historic values near currently
+                curr_ppw = drafted["PPW"].values
+                curr_price = drafted["Draft price"].values
+                cuml_ppw = []
+                cuml_price = []
+                for i, (ppw, price) in enumerate(zip(hist_ppw, hist_price)):
+                    if np.any(np.abs(curr_ppw - ppw) < 1.5):
+                        print(curr_ppw)
+                        print(ppw)
+                        use_hist_point[i] = False
+                    else:
+                        cuml_ppw.append(ppw)
+                        cuml_price.append(price)
+                # cuml_ppw.extend(curr_ppw.tolist())
+                # cuml_price.extend(curr_price.tolist())
+                for ppw, price in zip(curr_ppw, curr_price):
+                    cuml_ppw.append(ppw)
+                    cuml_price.append(price)
+                # x = np.concatenate([hist_ppw, drafted["PPW"].values])
+                # y = np.concatenate([hist_price, drafted["Draft price"].values])
+                model.fit(np.array(cuml_ppw), np.array(cuml_price), frac=0.5)
+            ax.scatter(
+                hist_ppw[use_hist_point],
+                hist_price[use_hist_point],
+                color=color,
+                s=10,
+                alpha=0.5,
+                edgecolor="k",
+            )
+            ax.scatter(
+                hist_ppw[~use_hist_point],
+                hist_price[~use_hist_point],
+                color=color,
+                s=3,
+                alpha=0.5,
+                edgecolor="k",
+            )
+            if not drafted.empty:
+                ax.scatter(
+                    drafted["PPW"].values,
+                    drafted["Draft price"].values,
+                    color=color,
+                    marker="x",
+                )
+            # total_spend = p_df.Paid.sum()
+            # percent_spend = total_spend / self.available_budget
+            vbds = np.linspace(5, 25, 100)
+            ax.plot(
+                vbds,
+                np.clip(model.predict(vbds), 1, None),
+                ls="--",
+                zorder=0,
+                color="k",
+            )
+            # ax.plot(vbds, np.clip(p(vbds), 1, None), ls="--", zorder=0, color="k")
+            ax.set_title(f"{pos}")  # - {percent_spend:.2f}")
+            ax.set_ylim([-5, 105])
+            ax.set_yticks(np.arange(0, 101, 10))
+            if ax.get_subplotspec().is_first_col():
+                ax.set_ylabel("Price")
+            if ax.get_subplotspec().is_last_row():
+                ax.set_xlabel("Projected points")
+
+            # projected_price = np.clip(p(draft_vals), 1, None)
+            projected_price = np.clip(model.predict(undrafted["PPW"].values), 1, None)
+            self.draft_df.loc[undrafted_inds, "Projected price"] = projected_price
+            ax.scatter(
+                undrafted["PPW"],
+                projected_price,
+                s=15,
+                facecolors=color,
+                edgecolors="k",
+            )
+        self.p_canvas.figure.tight_layout()
+        self.p_canvas.draw()
 
     def find_optimal_team(self, draft_state_df):
         solver = pywraplp.Solver("Draft", pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
@@ -569,7 +705,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         # Constraint for salary cap
         salary_cap = solver.Constraint(0, self.my_starter_budget)
         for i, player in draft_state_df.iterrows():
-            salary_cap.SetCoefficient(variables[i], player["Auction value"])
+            # salary_cap.SetCoefficient(variables[i], player["Auction value"])
+            salary_cap.SetCoefficient(variables[i], player["Projected price"])
 
         # Roster size
         # roster_size = self.n_league_starters - 2
@@ -639,10 +776,11 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
     def calc_player_opportunity_cost(self, player_name):
         player_ind = self.draft_df.loc[self.draft_df["Name"] == player_name].index
-        base_price = self.draft_df.loc[player_ind, "Auction value"].values[0]
-        min_price = max(1, base_price - 15)
-        max_price = base_price + 15
-        test_prices = np.linspace(min_price, max_price, 10)
+        base_price = self.draft_df.loc[player_ind, "Projected price"].values[0]
+        # base_price = self.draft_df.loc[player_ind, "Projected price"].values[0]
+        min_price = max(1, base_price - 25)
+        max_price = base_price + 25
+        test_prices = np.linspace(min_price, max_price, 7)
         test_df = copy.deepcopy(self.draft_df)
         opp_costs = []
         for i, test_price in enumerate(test_prices):
@@ -664,8 +802,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
         cmap = plt.get_cmap("RdYlGn_r")
         norm = mpl.colors.Normalize(vmin=-5, vmax=5)
-        self.ax.clear()
-        self.ax.scatter(
+        self.oc_ax.clear()
+        self.oc_ax.scatter(
             test_prices[: i + 1],
             opp_costs,
             c=opp_costs,
@@ -673,25 +811,50 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             norm=norm,
             edgecolor="k",
         )
-        self.ax.set_xlabel("Paid price")
-        self.ax.set_ylabel("Opportunity cost")
-        self.ax.axhline(0, color="k", ls="--")
-        self.canvas.draw()
+        self.oc_ax.set_xlabel("Paid price")
+        self.oc_ax.set_ylabel("Opportunity cost")
+        self.oc_ax.axhline(0, color="k", ls="--")
+        self.oc_canvas.draw()
         # Set up linear fit to find the root
         z = np.polyfit(test_prices, opp_costs, 1)
         p = np.poly1d(z)
+        z2 = np.polyfit(test_prices, np.array(opp_costs) + 2, 1)
+        p2 = np.poly1d(z2)
         title = player_name
-        if np.sign(p(min_price)) != np.sign(p(max_price)):
-            root = root_scalar(p, method="bisect", bracket=[min_price, max_price])
-            self.ax.axvline(root.root, color="k", ls="--")
+        # if np.sign(p(min_price)) != np.sign(p(max_price)):
+        #     root = root_scalar(p, method="bisect", bracket=[min_price, max_price])
+        #     self.ax.axvline(root.root, color="k", ls="--")
+        #     title += f" - Draft below ${root.root:.2f}"
+        # elif np.sign(p(min_price)) > 0 and np.sign(p(max_price)) > 0:
+        #     title += " - Never draft"
+        # elif np.sign(p(min_price)) < 0 and np.sign(p(max_price)) < 0:
+        #     title += " - Draft for any price"
+        # else:
+        #     title += " - How is this possible"
+        if np.sign(p2(min_price)) != np.sign(p2(max_price)):
+            root = root_scalar(p2, method="bisect", bracket=[min_price, max_price])
+            self.oc_ax.axvline(root.root, color="k", ls="--")
             title += f" - Draft below ${root.root:.2f}"
-        elif np.sign(p(min_price)) > 0 and np.sign(p(max_price)) > 0:
-            title += " - Never draft"
-        elif np.sign(p(min_price)) < 0 and np.sign(p(max_price)) < 0:
+        elif np.sign(p2(min_price)) > 0 and np.sign(p2(max_price)) > 0:
+            title += " - Probably not worth it"
+        elif np.sign(p2(min_price)) < 0 and np.sign(p2(max_price)) < 0:
             title += " - Draft for any price"
         else:
             title += " - How is this possible"
-        self.ax.set_title(title)
-        self.canvas.draw()
+        self.oc_ax.set_title(title)
+        self.oc_ax.set_ylim([-10, 10])
+        cont_prices = np.linspace(min_price, max_price, 100)
+        cont_oc = p(cont_prices)
+        self.oc_ax.scatter(
+            cont_prices,
+            cont_oc,
+            c=cont_oc,
+            cmap=cmap,
+            norm=norm,
+            ls="--",
+            alpha=0.5,
+            zorder=0,
+        )
+        self.oc_canvas.draw()
 
         # breakpoint()
