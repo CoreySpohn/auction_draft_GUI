@@ -14,7 +14,7 @@
    <string>Form</string>
   </property>
   <layout class="QGridLayout" name="gridLayout">
-   <item row="0" column="0">
+   <item row="1" column="0">
     <widget class="QLabel" name="selectedPlayerLabel">
      <property name="text">
       <string>Currently Up for Auction</string>
@@ -24,7 +24,13 @@
      </property>
     </widget>
    </item>
-   <item row="0" column="1">
+   <item row="3" column="0" rowspan="3">
+    <widget class="QTableWidget" name="selectedPlayerTable"/>
+   </item>
+   <item row="2" column="1" rowspan="4">
+    <widget class="QTableWidget" name="draftBoard"/>
+   </item>
+   <item row="1" column="1">
     <widget class="QLabel" name="draftBoardLabel">
      <property name="text">
       <string>Draft Board</string>
@@ -37,7 +43,7 @@
      </property>
     </widget>
    </item>
-   <item row="2" column="2">
+   <item row="3" column="2">
     <widget class="QLabel" name="optTeamLabel">
      <property name="text">
       <string>Optimal Team</string>
@@ -47,10 +53,10 @@
      </property>
     </widget>
    </item>
-   <item row="1" column="2">
+   <item row="2" column="2">
     <widget class="QTableWidget" name="myTeamTable"/>
    </item>
-   <item row="0" column="2">
+   <item row="1" column="2">
     <widget class="QLabel" name="myTeamLabel">
      <property name="text">
       <string>My Team</string>
@@ -60,14 +66,29 @@
      </property>
     </widget>
    </item>
-   <item row="3" column="2">
+   <item row="4" column="2">
     <widget class="QTableWidget" name="optTeamTable"/>
    </item>
-   <item row="1" column="1" rowspan="4">
-    <widget class="QTableWidget" name="draftBoard"/>
+   <item row="0" column="1">
+    <widget class="QPushButton" name="exportButton">
+     <property name="text">
+      <string>Export draft</string>
+     </property>
+    </widget>
    </item>
-   <item row="2" column="0" rowspan="3">
-    <widget class="QTableWidget" name="selectedPlayerTable"/>
+   <item row="0" column="0">
+    <widget class="QPushButton" name="importButton">
+     <property name="text">
+      <string>Import draft</string>
+     </property>
+    </widget>
+   </item>
+   <item row="0" column="2">
+    <widget class="QPushButton" name="pushButton_2">
+     <property name="text">
+      <string>PushButton</string>
+     </property>
+    </widget>
    </item>
   </layout>
  </widget>
