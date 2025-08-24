@@ -67,7 +67,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
         # self.ui.set.addWidget(self.oc_canvas, 1, 0, 1, 1)
 
-        self.sport = "nba"
+        self.sport = "nfl"
         if self.sport == "nfl":
             # Set up position cost plots
             self.pax = self.p_canvas.figure.subplots(ncols=2, nrows=2)
@@ -76,8 +76,13 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.auction_budget = 300
             self.starter_percent = 0.97
             self.bench_percent = 1 - self.starter_percent
+            self.assume_site_prices = False
+            self.prev_years = [2021, 2023]
+            self.site_file = ".cache/sleeper_2024_3.csv"
 
-            setup = "1QB"
+            # setup = "1QB"
+            setup = "1IDP"
+            self.is_IDP = True
             self.te_premium = True
             self.scoring_coeffs = {
                 "PASSING_ATT": 0,
@@ -94,7 +99,16 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 "RECEIVING_YDS": 0.1,
                 "RECEIVING_TDS": 6,
             }
-            if setup == "1QB":
+            self.def_scoring_coeffs = {
+                "Tackle": 1,
+                "Assist": 0.5,
+                "Sack": 2,
+                "PD": 3,
+                "INT": 4,
+                "FF": 0,
+                "FR": 4,
+            }
+            if setup == "1IDP":
                 self.league_roster = {
                     "QB": 1,
                     "RB": 2,
@@ -103,26 +117,32 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     "FLEX": 2,
                     "K": 1,
                     "DEF": 1,
-                    "B": 6,
+                    "DL": 0,
+                    "LB": 0,
+                    "DB": 0,
+                    "IDP": 1,
+                    "B": 7,
                 }
-                self.prev_year = 2021
-                self.site_file = ".cache/sleeper_1QB.csv"
-            elif setup == "2QB":
+            elif setup == "3IDP":
                 self.league_roster = {
-                    "QB": 2,
+                    "QB": 1,
                     "RB": 2,
                     "WR": 3,
                     "TE": 1,
-                    "FLEX": 1,
+                    "FLEX": 2,
                     "K": 1,
-                    "DEF": 1,
+                    "DEF": 0,
+                    "DL": 1,
+                    "LB": 1,
+                    "DB": 1,
+                    "IDP": 0,
                     "B": 6,
                 }
-                self.prev_year = 2022
-                self.site_file = ".cache/sleeper_2QB.csv"
             self.relevant_starters = ["QB", "RB", "WR", "TE", "FLEX"]
+            if self.is_IDP:
+                self.relevant_starters.extend(["DL", "LB", "DB", "IDP"])
             self.flex_positions = ["RB", "WR", "TE"]
-            # "QB": 1, "RB": 2, "WR": 3, "TE": 1, "FLEX": 2}
+            self.idp_positions = ["DL", "LB", "DB"]
 
             # Taken from elboberto's spreadsheet
             # self.league_baselines = {
@@ -132,11 +152,36 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             #     "TE": [10, 17],
             # }
             self.league_baselines = {"QB": [], "RB": [], "WR": [], "TE": []}
+            if self.is_IDP:
+                self.league_baselines.update(
+                    {
+                        "DL": [],
+                        "LB": [],
+                        "DB": [],
+                    }
+                )
             self.single_eligible_positions = ["QB", "RB", "WR", "TE"]
+            if setup == "3IDP":
+                self.single_eligible_positions.extend(["DL", "LB", "DB"])
             self.league_teams = 10
             self.flex_positions = ["RB", "WR", "TE"]
             # pos_bench_depth =
             self.relevant_positions = ["QB", "RB", "WR", "TE", "FLEX", "B"]
+            if self.is_IDP:
+                self.relevant_positions.extend(["DL", "LB", "DB", "IDP"])
+
+            # self.n_players = (
+            #     self.league_roster["QB"]
+            #     + self.league_roster["RB"]
+            #     + self.league_roster["WR"]
+            #     + self.league_roster["TE"]
+            #     + self.league_roster["FLEX"]
+            #     + self.league_roster["K"]
+            #     + self.league_roster["DEF"]
+            #     + self.league_roster["B"]
+            # )
+            self.n_players = sum([val for _, val in self.league_roster.items()])
+
         elif self.sport == "nba":
             self.pax = self.p_canvas.figure.subplots(ncols=1, nrows=1)
             self.ui.gridLayout.addWidget(self.p_canvas, 4, 0, 2, 1)
@@ -176,8 +221,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 "UTIL",
                 "B",
             ]
-            self.prev_year = 2022
-            self.site_file = Path(".cache/espn_from_hbball.csv")
+            self.prev_years = [2022, 2023]
+            self.site_file = Path(".cache/espn_from_hbball_2023.csv")
             self.n_players = (
                 self.league_roster["PG"]
                 + self.league_roster["SG"]
@@ -202,10 +247,14 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             for npos in range(1, n_required + 1):
                 self.league_positions.append(pos)
                 self.league_position_numbers.append(npos)
+        if self.sport == "nfl":
+            disp_score = "PPW"
+        elif self.sport == "nba":
+            disp_score = "PPG"
         self.draft_board_display_cols = {
             "Name": {"is_editable": False, "dtype": str},
             "Position": {"is_editable": False, "dtype": str},
-            "PPG": {"is_editable": False, "dtype": float},
+            disp_score: {"is_editable": False, "dtype": float},
             "T/A": {"is_editable": True, "dtype": str},
             "Rank": {"is_editable": False, "dtype": int},
             "Site": {"is_editable": False, "dtype": float},
@@ -548,17 +597,25 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.empty_color_qt = qtg.QColor.fromRgbF(empty[0], empty[1], empty[2], 0.25)
         self.on_team_color = "royalblue"
         on_team = colors.to_rgba(self.on_team_color)
-        self.on_team_color_qt = qtg.QColor.fromRgbF(on_team[0], on_team[1], on_team[2], 0.25)
+        self.on_team_color_qt = qtg.QColor.fromRgbF(
+            on_team[0], on_team[1], on_team[2], 0.25
+        )
         self.on_other_team_color = "salmon"
         on_other_team = colors.to_rgba(self.on_other_team_color)
-        self.on_other_team_color_qt = qtg.QColor.fromRgbF(on_other_team[0], on_other_team[1], on_other_team[2], 0.25)
+        self.on_other_team_color_qt = qtg.QColor.fromRgbF(
+            on_other_team[0], on_other_team[1], on_other_team[2], 0.25
+        )
         self.wanted_color = "lightgreen"
         wanted = colors.to_rgba(self.wanted_color)
-        self.wanted_color_qt = qtg.QColor.fromRgbF(wanted[0], wanted[1], wanted[2], 0.25)
-        self.player_status_colors = {"OnOtherTeam":self.on_other_team_color_qt,
-                                     "OnTeam": self.on_team_color_qt,
-                                    "Wanted":self.wanted_color_qt,
-                                     "None":self.empty_color_qt}
+        self.wanted_color_qt = qtg.QColor.fromRgbF(
+            wanted[0], wanted[1], wanted[2], 0.25
+        )
+        self.player_status_colors = {
+            "OnOtherTeam": self.on_other_team_color_qt,
+            "OnTeam": self.on_team_color_qt,
+            "Wanted": self.wanted_color_qt,
+            "None": self.empty_color_qt,
+        }
 
     def update_opt_team(self):
         if self.draft_df.loc[self.draft_df["Drafted"] == 2].shape[0] < self.n_players:
@@ -630,9 +687,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     if color:
                         table.item(i, j).setBackground(qtg.QColor(color))
                     else:
-                        table.item(i, j).setBackground(
-                            qtg.QColor(self.empty_color_qt)
-                        )
+                        table.item(i, j).setBackground(qtg.QColor(self.empty_color_qt))
                 else:
                     # table.item(i, j).setBackground(
                     #     qtg.QColor(self.position_colors[player_position])
@@ -690,14 +745,20 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                         self.ui.draftBoard.item(i, j).setBackground(
                             qtg.QColor(self.empty_color_qt)
                         )
+                elif (
+                    col == "Position" and player_position in self.position_colors.keys()
+                ):
+                    self.ui.draftBoard.item(i, j).setBackground(
+                        self.position_colors[player_position]
+                    )
                 else:
                     self.ui.draftBoard.item(i, j).setBackground(
                         qtg.QColor(self.player_status_colors[draft_status])
                     )
         if self.sport == "nfl":
-            self.ui.draftBoard.sortByColumn(3, qtc.Qt.DescendingOrder)
+            self.ui.draftBoard.sortByColumn(6, qtc.Qt.DescendingOrder)
         elif self.sport == "nba":
-            self.ui.draftBoard.sortByColumn(4, qtc.Qt.DescendingOrder)
+            self.ui.draftBoard.sortByColumn(5, qtc.Qt.DescendingOrder)
         self.ui.draftBoard.resizeColumnsToContents()
 
     def update_draft_board_column(self, column_to_change):
@@ -715,6 +776,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             player_position = player["Position"]
             player_draft_status = player["Drafted"]
             player_on_opt_team = player["OnOptTeam"]
+            if not isinstance(player_draft_status, float):
+                breakpoint()
             if player_draft_status == 2:
                 draft_status = "OnTeam"
             elif player_on_opt_team:
@@ -747,6 +810,12 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                         self.ui.draftBoard.item(i, j).setBackground(
                             qtg.QColor(self.empty_color_qt)
                         )
+                elif (
+                    col == "Position" and player_position in self.position_colors.keys()
+                ):
+                    self.ui.draftBoard.item(i, j).setBackground(
+                        self.position_colors[player_position]
+                    )
                 else:
                     self.ui.draftBoard.item(i, j).setBackground(
                         qtg.QColor(self.player_status_colors[draft_status])
@@ -776,21 +845,29 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         column_name = list(self.draft_board_display_cols.keys())[column]
         # if column_name in ["Drafted", "Draft$"]:
         if column_name == "Draft$":
-            changed_number = float(changed_text)
-            player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
-            column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
-            self.draft_df.loc[player_df_row, column_name] = changed_number
+            try:
+                changed_number = float(changed_text)
+                player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
+                column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
+                self.draft_df.loc[player_df_row, column_name] = changed_number
+            except ValueError:
+                pass
+                # qtw.QMessageBox.warning(self, "Input Error", "Please enter a valid number")
         elif column_name == "Drafted":
-            changed_number = float(changed_text)
-            player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
-            column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
-            self.draft_df.loc[player_df_row, column_name] = changed_number
-            self.calc_player_price()
-            self.update_draft_board_column("Proj$")
-            self.update_my_team()
-            self.update_opt_team()
-            self.export_draft()
-            # self.update_top_ocs()
+            try:
+                changed_number = float(changed_text)
+                player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
+                column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
+                self.draft_df.loc[player_df_row, column_name] = changed_number
+                self.calc_player_price()
+                self.update_draft_board_column("Proj$")
+                self.update_my_team()
+                self.update_opt_team()
+                self.export_draft()
+                # self.update_top_ocs()
+            except ValueError:
+                pass
+                # qtw.QMessageBox.warning( self, "Input Error", "Please enter a valid number")
         elif column_name == "T/A":
             player_df_row = np.argwhere(self.draft_df["Name"] == player_name)[0]
             column_name = self.ui.draftBoard.horizontalHeaderItem(column).text()
@@ -807,7 +884,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.update_opt_team()
 
     def get_nfldata(self):
-        loc = Path(f".cache/raw_{datetime.date.today().strftime('%Y-%m-%d')}.csv")
+        loc = Path(f".cache/raw_{datetime.date.today().strftime('%Y-%m-%d')}.p")
         loc.parent.mkdir(exist_ok=True)
         if loc.exists():
             with open(loc, "rb") as f:
@@ -832,7 +909,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 for i, row in position_data.iterrows():
                     player_string = row[0]
                     player_name = ""
-                    for i, _string_part in enumerate(player_string.split(" ")[:-2]):
+                    for i, _string_part in enumerate(player_string.split(" ")[:-1]):
                         if i > 0:
                             player_name += " "
                         player_name += _string_part
@@ -887,8 +964,61 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             _low = pd.concat(lowdfs).fillna(value=0)
             _low.insert(0, "NAME", _low.index)
             _low = _low.reset_index(drop=True)
-            self.player_stats = {"average": _avg, "high": _high, "low": _low}
+
+            # Dictionary mapping defensive positions to their respective IDs on fftoday
+            def_pos_ids = {"DL": 50, "LB": 60, "DB": 70}
+
+            def_avgdfs = []
+
+            url_template = "https://www.fftoday.com/rankings/playerproj.php?PosID={pos_id}&LeagueID="
+
+            for position, pos_id in def_pos_ids.items():
+                url = url_template.format(pos_id=pos_id)
+                driver.get(url)
+
+                # Get the table from the page
+                try:
+                    df = pd.read_html(driver.page_source)[1]
+                    position_data = df.iloc[11:, 1:].reset_index(drop=True)
+                    # Step 1: Set the first row (index 11) as the new column headers
+                    column_names = position_data.iloc[0].values
+                    column_names[0] = "Player"
+                    position_data.columns = column_names
+                    position_data = position_data.drop(position_data.index[0])
+                    position_data = position_data.reset_index(drop=True)
+
+                except ValueError:
+                    print(f"Could not find table for {position} at {url}")
+                    continue
+
+                avg_stats = {}
+
+                for i, row in position_data.iterrows():
+                    player_name = row["Player"]
+                    if player_name == "Josh Allen":
+                        player_name = "Josh Allen DE"
+
+                    if player_name not in avg_stats:
+                        avg_stats[player_name] = {"POSITION": position}
+
+                    # Populate the average stats, assuming relevant stats are columns
+                    for col in position_data.columns:
+                        if col not in ["Player", "Bye", "Tm", "FPts"]:
+                            avg_stats[player_name][col] = (
+                                float(row[col]) if pd.notna(row[col]) else 0
+                            )
+                avgdf = pd.DataFrame(avg_stats).T
+
+                avgdfs.append(avgdf)
+
             driver.close()
+
+            # Combine all the average dataframes
+            _avg = pd.concat(avgdfs).fillna(value=0)
+            _avg.insert(0, "NAME", _avg.index)
+            _avg = _avg.reset_index(drop=True)
+
+            self.player_stats = {"average": _avg, "high": _high, "low": _low}
             with open(loc, "wb") as f:
                 pickle.dump(self.player_stats, f)
 
@@ -922,24 +1052,26 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 "DD": ("ContentPlaceHolder1_TextBox15", 0),
                 "TD": ("ContentPlaceHolder1_TextBox16", 0),
                 "PF": ("ContentPlaceHolder1_TextBox17", 0),
+                # "ConentPlaceHolder1_DDPOSFROM": "3",
             }
             # Set positions to pull from ESPN
             pos_site = driver.find_element(By.ID, "ContentPlaceHolder1_DDPOSFROM")
             Select(pos_site).select_by_value("3")
 
             # Fill in all scoring rules
-            for (box_id, value) in hbb_form.values():
+            for box_id, value in hbb_form.values():
                 element = driver.find_element(By.ID, box_id)
                 element.clear()
                 element.send_keys(value)
                 time.sleep(0.15)
 
             # Push update button
+            time.sleep(5)
             button = driver.find_element(By.ID, "ContentPlaceHolder1_Button1")
             button.click()
-            time.sleep(2)
             data = pd.read_html(driver.page_source)[2]
             data.to_csv(loc)
+            driver.close()
         # COULD USE THIS INSTEAD OF ASSUMING 3.5 GAMES FOR EACH PLAYER
         # data["GPW"] = data["GP"].values / 22
         # data["PPW"] = data["TOTAL"] * data["GPW"]
@@ -949,10 +1081,19 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.player_stats = data[["Name", "Position", "PPW", "GP"]]
 
     def calc_fantasy_points(self):
-        for statdf in self.player_stats.values():
+        for key, statdf in self.player_stats.items():
             statdf["FANTASY_POINTS"] = np.zeros(statdf.shape[0])
             for name, coeff in self.scoring_coeffs.items():
                 statdf["FANTASY_POINTS"] += statdf[name] * coeff
+            if self.is_IDP:
+                if key != "average":
+                    # FFToday does not have high/low projections (which
+                    # FantasyPros does) so we only calculate the fantasy points
+                    # for the average stats
+                    continue
+                # Add in defensive scoring
+                for name, coeff in self.def_scoring_coeffs.items():
+                    statdf["FANTASY_POINTS"] += statdf[name] * coeff
             # TE PREMIUM
             if self.te_premium:
                 te_mask = statdf["POSITION"] == "TE"
@@ -1003,6 +1144,10 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             bench_end_ind = (
                 self.relevant_roster_size * self.league_teams - starting_QBs - bench_QBs
             )
+            if self.is_IDP:
+                # Remove the IDP positions from the bench for FLEX
+                for pos in ["DL", "LB", "DB", "IDP"]:
+                    bench_end_ind -= self.league_teams * self.league_roster[pos]
             flex_bench_df = fdf.loc[
                 (fdf["FLEX_RANK"] > flex_end_point)
                 & (fdf["FLEX_RANK"] <= bench_end_ind)
@@ -1018,6 +1163,73 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.league_baselines["TE"].append(starting_TEs)
             self.league_baselines["TE"].append(starting_TEs + bench_TEs)
 
+            if self.is_IDP:
+                # Defensive baselines
+                idp_df = _df.loc[_df.POSITION.isin(["DL", "LB", "DB"])].sort_values(
+                    "PPW", ascending=False
+                )
+                # Cut each IDP position after number 20
+                for pos in ["DL", "LB", "DB"]:
+                    idp_df = idp_df.drop(
+                        idp_df.loc[
+                            (idp_df["POSITION"] == pos) & (idp_df["Rank"] > 17)
+                        ].index
+                    )
+
+                # Rank the IDP players based on PPW
+                idp_df["IDP_RANK"] = idp_df["PPW"].rank(ascending=False)
+
+                # IDP baselines
+                starting_DLs = self.league_roster["DL"] * self.league_teams
+                starting_LBs = self.league_roster["LB"] * self.league_teams
+                starting_DBs = self.league_roster["DB"] * self.league_teams
+
+                # Calculate the start and end points for IDP starters based on IDP_RANK
+                idp_start_point = starting_DLs + starting_LBs + starting_DBs
+                idp_end_point = (
+                    idp_start_point + self.league_roster["IDP"] * self.league_teams
+                )
+
+                # Identify the starter IDP players based on IDP_RANK
+                idp_starter_df = idp_df.loc[
+                    (idp_df["IDP_RANK"] > idp_start_point)
+                    & (idp_df["IDP_RANK"] <= idp_end_point)
+                ]
+
+                # Count the number of starters by position
+                idp_start_counts = idp_starter_df.POSITION.value_counts()
+                starting_DLs += idp_start_counts.get("DL", 0)
+                starting_LBs += idp_start_counts.get("LB", 0)
+                starting_DBs += idp_start_counts.get("DB", 0)
+
+                # In the case where there are only IDP players, the bench is
+                # just twice the number of teams
+                if (
+                    starting_DLs + starting_LBs + starting_DBs
+                    == self.league_roster["IDP"] * self.league_teams
+                ):
+                    bench_end_ind = self.league_teams * 2
+                else:
+                    bench_end_ind = self.relevant_roster_size * self.league_teams
+                # Calculate the bench range and identify the bench IDP players
+                idp_bench_df = idp_df.loc[
+                    (idp_df["IDP_RANK"] > idp_end_point)
+                    & (idp_df["IDP_RANK"] <= bench_end_ind)
+                ]
+                idp_bench_counts = idp_bench_df.POSITION.value_counts()
+                bench_DLs = idp_bench_counts.get("DL", 0)
+                bench_LBs = idp_bench_counts.get("LB", 0)
+                bench_DBs = idp_bench_counts.get("DB", 0)
+
+                # Append baseline values for IDP positions
+                self.league_baselines["DL"].append(starting_DLs)
+                self.league_baselines["DL"].append(starting_DLs + bench_DLs)
+                self.league_baselines["LB"].append(starting_LBs)
+                self.league_baselines["LB"].append(starting_LBs + bench_LBs)
+                self.league_baselines["DB"].append(starting_DBs)
+                self.league_baselines["DB"].append(starting_DBs + bench_DBs)
+                # FIX: The baselines here seem to be wrong because the starter df is not
+                # populated for 3IDP
             for pos, (
                 starter_baseline,
                 bench_baseline,
@@ -1025,12 +1237,17 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 starter_baseline_ind = starter_baseline - 1
                 bench_baseline_ind = bench_baseline - 1
                 pos_mask = _df.POSITION == pos
+                if self.league_baselines[pos] == [0, 0]:
+                    # Drop all players if there are no baselines
+                    _df = _df.drop(_df.loc[pos_mask].index)
+                    continue
                 pos_df = _df.loc[pos_mask]
                 starter_pos_replacement = pos_df.iloc[starter_baseline_ind]
                 bench_pos_replacement = pos_df.iloc[bench_baseline_ind]
                 starter_inds = (
                     _df.loc[(_df.POSITION == pos)].iloc[:starter_baseline_ind].index
                 )
+
                 _df.loc[starter_inds, "PlayerStatus"] = "Starter"
                 bench_inds = (
                     _df.loc[(_df.POSITION == pos)]
@@ -1095,7 +1312,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.draft_df = copy.deepcopy(
                 _df[["Name", "Position", "PPW", "VORP", "GP"]]
             )
-            self.draft_df['PPG'] = self.draft_df['PPW'] / 3.5
+            self.draft_df["PPG"] = self.draft_df["PPW"] / 3.5
             self.draft_df["Rank"] = self.draft_df["PPW"].rank(ascending=False)
             self.draft_df["Auction value"] = np.zeros(self.draft_df.shape[0])
             self.draft_df["Drafted"] = np.zeros(self.draft_df.shape[0])
@@ -1115,24 +1332,41 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.draft_df["Proj$"] = np.ones(self.draft_df.shape[0])
             self.league_position_data = {}
             for pos in poss:
-                df = pd.read_csv(f".cache/herndon_{self.prev_year}/{pos}s.csv").fillna(
-                    1
-                )
-                x = df["PTS"].values / 17
-                y = df["Paid"].values
+                dfs = []
+                for year in self.prev_years:
+                    df = pd.read_csv(f".cache/herndon_{year}/{pos}s.csv").fillna(1)
+                    df["Rank"] = df["PTS"].rank(ascending=False)
+                    dfs.append(df[["Rank", "PTS", "Paid"]])
+
+                df = pd.concat(dfs)
+
+                # df = pd.read_csv(f".cache/herndon_{self.prev_year}/{pos}s.csv").fillna(
+                #     1
+                # )
+                points = df["PTS"].values / 17
+                prices = df["Paid"].values
+                ranks = df["Rank"].values
                 total_spend = df.Paid.sum()
                 self.league_position_data[pos] = {
                     "hist_spend": total_spend,
-                    "hist_ppw": x,
-                    "hist_price": y,
-                    "hist_rank": df["PTS"].rank(ascending=False).values,
+                    "hist_ppw": points,
+                    "hist_price": prices,
+                    "hist_rank": ranks,
                     "curr_spend": 0,
                     "curr_ppw": None,
                     "curr_price": None,
                 }
         elif self.sport == "nba":
             self.draft_df["Projected price"] = np.ones(self.draft_df.shape[0])
-            df = pd.read_csv(f".cache/bball/{self.prev_year}.csv").fillna(1)
+            dfs = []
+            for year in self.prev_years:
+                df = pd.read_csv(f".cache/bball/{year}.csv").fillna(1)
+                df["Rank"] = df["TOTAL"].rank(ascending=False)
+                dfs.append(df[["Rank", "TOTAL", "Paid", "GP", "SITE", "NAME"]])
+
+            df = pd.concat(dfs)
+
+            # df = pd.read_csv(f".cache/bball/{self.prev_year}.csv").fillna(1)
             x = df["TOTAL"].values * 3.5
             y = df["Paid"].values
             total_spend = df.Paid.sum()
@@ -1151,7 +1385,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
     def add_site_prices(self):
         if self.sport == "nfl":
-            price_adjustment = self.auction_budget / 300
+            price_adjustment = 1
         elif self.sport == "nba":
             self.get_espn_avg_prices()
             price_adjustment = self.auction_budget / 200
@@ -1165,6 +1399,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 site_prices.append(1)
             else:
                 site_prices.append(site_price.values[0] * price_adjustment)
+
         self.draft_df["Site"] = site_prices
         self.draft_df["Site_rank"] = self.draft_df["Site"].rank(ascending=False)
 
@@ -1265,16 +1500,19 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                             cuml_hist_rank.append(rank)
                             cuml_hist_price.append(price)
                         if np.any(np.abs(curr_rank - rank) == 0):
-                            hist_chi2.append(
-                                (
-                                    curr_price[
-                                        np.argwhere(np.abs(curr_rank - rank) == 0)
-                                    ]
-                                    - price
-                                )[0][0]
-                                ** 2
-                                / price
-                            )
+                            if price == 0:
+                                hist_chi2.append(0)
+                            else:
+                                hist_chi2.append(
+                                    (
+                                        curr_price[
+                                            np.argwhere(np.abs(curr_rank - rank) == 0)
+                                        ]
+                                        - price
+                                    )[0][0]
+                                    ** 2
+                                    / price
+                                )
                     # Add site values
                     for i, (rank, price) in enumerate(zip(site_rank, site_price)):
                         if np.any(np.abs(curr_rank - rank) < 2):
@@ -1369,9 +1607,9 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                         np.array(curr_price[sort_mask]),
                         frac=0.5,
                     )
-                    sort_mask = np.argsort(all_curr_rank)
+                    sort_mask_all = np.argsort(all_curr_rank)
                     curr_predictions = np.clip(
-                        curr_model.predict(all_curr_rank[sort_mask]), 1, None
+                        curr_model.predict(all_curr_rank), 1, None
                     )
                     # ax.scatter(curr_rank, curr_price, zorder=5)
                     # ax.scatter(all_curr_rank[sort_mask], curr_predictions, zorder=5)
@@ -1440,6 +1678,10 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     projected_price
                 )
                 self.draft_df.loc[pos_inds, "Proj$"] = projected_price
+                if self.assume_site_prices:
+                    self.draft_df.loc[pos_inds, "Proj$"] = self.draft_df.loc[
+                        pos_inds, "Site"
+                    ]
                 # ud_projected_hist_price = np.clip(
                 #     hist_model.predict(undrafted["Rank"].values), 1, None
                 # )
@@ -1454,6 +1696,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 # if pos == "TE":
                 #     breakpoint()
                 # drafted_colors = drafted[]
+                all_points = []
+                labels = {}
                 if not drafted.empty:
                     other_drafted = drafted.loc[drafted["Drafted"] == 1]
                     my_drafted = drafted.loc[drafted["Drafted"] == 2]
@@ -1463,7 +1707,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     other_dcolors = [
                         c if c is not None else self.empty_color for c in other_dcolors
                     ]
-                    ax.scatter(
+                    otherdpoints = ax.scatter(
                         other_drafted["Rank"],
                         other_drafted["Draft$"].values,
                         c=other_dcolors,
@@ -1471,22 +1715,31 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                         edgecolor="k",
                         alpha=0.5,
                     )
+                    otherdnames = other_drafted["Name"].values
+                    all_points.append(otherdpoints)
+                    labels[otherdpoints] = otherdnames
                     my_drafted = drafted.loc[drafted["Drafted"] == 2]
                     my_dcolors = [
                         self.ta_colors.get(ta) for ta in my_drafted["T/A"].values
                     ]
+                    # my_dcolors = [
+                    #     c if c is not None else self.empty_color for c in my_dcolors
+                    # ]
                     my_dcolors = [
-                        c if c is not None else self.empty_color for c in my_dcolors
+                        c if c is not None else self.on_team_color for c in my_dcolors
                     ]
-                    ax.scatter(
+                    mydpoints = ax.scatter(
                         my_drafted["Rank"],
                         my_drafted["Draft$"].values,
                         c=my_dcolors,
                         marker="*",
                         s=40,
-                        edgecolor=my_dcolors[0],
+                        # edgecolor=my_dcolors[0],
                         # alpha=0.5,
                     )
+                    mydnames = my_drafted["Name"].values
+                    all_points.append(mydpoints)
+                    labels[mydpoints] = mydnames
                     # for rank, price, color in zip(
                     #     my_drafted["Rank"].values,
                     #     my_drafted["Draft$"].values,
@@ -1504,16 +1757,27 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     #     )
                 udcolors = [self.ta_colors.get(ta) for ta in undrafted["T/A"].values]
                 udcolors = [c if c is not None else self.empty_color for c in udcolors]
-                ax.scatter(
-                    undrafted["Rank"],
-                    ud_projected_prices,
+                udpoints = ax.scatter(
+                    self.draft_df.loc[undrafted.index, "Rank"],
+                    self.draft_df.loc[undrafted.index, "Proj$"],
+                    # undrafted["Rank"],
+                    # ud_projected_prices,
                     s=15,
                     facecolors=udcolors,
                     edgecolors="k",
                 )
+            if self.is_IDP:
+                # Add in the IDP positions based only on the Site price
+                idp_positions = ["DL", "LB", "DB"]
+                for pos in idp_positions:
+                    self.draft_df.loc[self.draft_df["Position"] == pos, "Proj$"] = (
+                        self.draft_df.loc[self.draft_df["Position"] == pos, "Site"]
+                    )
             total_spent_budget = self.draft_df["Draft$"].sum()
+            total_projected_budget = self.draft_df["Proj$"].sum()
             figtitle = (
-                f"\${total_spent_budget:.0f} of \${self.available_budget:.0f} spent"
+                f"\${total_spent_budget:.0f} of \${self.available_budget:.0f} spent. "
+                f"Currently projecting \${total_projected_budget:.0f} "
             )
             # if current_draft_excess_price > total_excess_budget:
             #     figtitle += "Expect discounts at end"
@@ -1524,251 +1788,11 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.p_canvas.draw()
         elif self.sport == "nba":
             ax = self.pax
-            #     # Calculate the remaining excess dollars
-            #     players_rostered = self.my_rostered_players + self.league_rostered_players
-            #     n_left = self.teams * self.roster_size - players_rostered
-            #     remaining_excess_dollars = self.my_budget + self.league_budget - n_left
-
-            #     # Get the remaining value in the draft
-            #     value_mask = self.draft_df["Drafted"] == 0
-            #     positive_vorp_mask = self.draft_df["VORP"] > 0
-            #     remaining_value = self.draft_df.loc[
-            #         value_mask & positive_vorp_mask, "VORP"
-            #     ].sum()
-
-            #     # Excess dollars per VORP
-            #     edpv = remaining_excess_dollars / remaining_value
-            #     av = self.draft_df.loc[value_mask, "VORP"].values * edpv
-            #     av[av <= 0] = 1
-            #     self.draft_df.loc[value_mask, "AV"] = np.round(av)
-
-            #     current_draft_excess_price = 0
             ax.clear()
             ax.set_ylim([-5, 90])
             ax.set_xlim([-5, 150])
-            #     cmap = plt.get_cmap("viridis")
-            #     color = cmap(0.5)
-            #     pos_data = self.league_hist_data
-            #     hist_price = pos_data["hist_price"]
-            #     hist_rank = pos_data["hist_rank"]
             undrafted = self.draft_df.loc[self.draft_df.Drafted == 0]
             drafted = self.draft_df.loc[self.draft_df.Drafted != 0]
-
-            #     all_curr_rank = self.draft_df["Rank"].values
-            #     all_curr_site = self.draft_df["Site"].values
-
-            #     # Get site information
-            #     site_price = self.draft_df["Site"].values
-            #     site_rank = (
-            #         self.draft_df["Site"].rank(method="first", ascending=False).values
-            #     )
-            #     hist_model = lowess.Lowess()
-            #     curr_model = lowess.Lowess()
-            #     use_hist_point = np.ones(len(hist_rank), dtype=bool)
-            #     use_site_point = np.ones(len(site_rank), dtype=bool)
-            #     hist_chi2 = []
-            #     site_chi2 = []
-
-            #     if drafted.empty:
-            #         hist_model.fit(
-            #             hist_rank,
-            #             hist_price,
-            #             frac=1,
-            #         )
-            #     else:
-            #         # remove values near currently drafted players
-            #         curr_rank = drafted["Rank"]
-            #         curr_price = drafted["Draft$"].values
-            #         cuml_hist_price = []
-            #         cuml_hist_rank = []
-            #         cuml_site_price = []
-            #         cuml_site_rank = []
-            #         # Add historical values
-            #         for i, (rank, price) in enumerate(zip(hist_rank, hist_price)):
-            #             if np.any(np.abs(curr_rank - rank) < 2):
-            #                 use_hist_point[i] = False
-            #             else:
-            #                 cuml_hist_rank.append(rank)
-            #                 cuml_hist_price.append(price)
-            #             if np.any(np.abs(curr_rank - rank) == 0):
-            #                 hist_chi2.append(
-            #                     (
-            #                         curr_price[np.argwhere(np.abs(curr_rank - rank) == 0)]
-            #                         - price
-            #                     )[0][0]
-            #                     ** 2
-            #                     / price
-            #                 )
-            #         # Add site values
-            #         for i, (rank, price) in enumerate(zip(site_rank, site_price)):
-            #             if np.any(np.abs(curr_rank - rank) < 2):
-            #                 use_site_point[i] = False
-            #             else:
-            #                 cuml_site_rank.append(rank)
-            #                 cuml_site_price.append(price)
-            #             if np.any(np.abs(curr_rank - rank) == 0):
-            #                 site_chi2.append(
-            #                     (
-            #                         curr_price[np.argwhere(np.abs(curr_rank - rank) == 0)]
-            #                         - price
-            #                     )[0][0]
-            #                     ** 2
-            #                     / price
-            #                 )
-            #         for rank, price in zip(curr_rank, curr_price):
-            #             cuml_hist_rank.append(rank)
-            #             cuml_hist_price.append(price)
-            #         hist_model.fit(
-            #             np.array(cuml_hist_rank), np.array(cuml_hist_price), frac=1
-            #         )
-            #     ax.scatter(
-            #         hist_rank[use_hist_point],
-            #         hist_price[use_hist_point],
-            #         color=color,
-            #         s=7,
-            #         alpha=0.25,
-            #         edgecolor="k",
-            #     )
-            #     ax.scatter(
-            #         hist_rank[~use_hist_point],
-            #         hist_price[~use_hist_point],
-            #         color=color,
-            #         s=3,
-            #         alpha=0.25,
-            #         edgecolor="k",
-            #     )
-            #     ax.scatter(
-            #         all_curr_rank[use_site_point],
-            #         site_price[use_site_point],
-            #         color=color,
-            #         s=7,
-            #         alpha=0.25,
-            #         edgecolor="r",
-            #     )
-            #     ax.scatter(
-            #         all_curr_rank[~use_site_point],
-            #         site_price[~use_site_point],
-            #         color=color,
-            #         s=3,
-            #         alpha=0.25,
-            #         edgecolor="r",
-            #     )
-            #     ax.set_ylim([-5, 105])
-            #     ax.set_yticks(np.arange(0, 101, 10))
-            #     if ax.get_subplotspec().is_first_col():
-            #         ax.set_ylabel("Price")
-            #     if ax.get_subplotspec().is_last_row():
-            #         ax.set_xlabel("Rank")
-
-            #     projected_hist_price = np.clip(hist_model.predict(all_curr_rank), 1, None)
-            #     projected_site_price = np.clip(all_curr_site, 1, None)
-            #     if len(hist_chi2) > 0:
-            #         # Weighting based on the inverted chi^2 value of the historical
-            #         # and site data
-            #         hist_chi2_inv_sum = 1 / max(sum(hist_chi2), 1e-5)
-            #         site_chi2_inv_sum = 1 / max(sum(site_chi2), 1e-5)
-            #         chi2_inv_sum = hist_chi2_inv_sum + site_chi2_inv_sum
-            #         hist_weight = hist_chi2_inv_sum / chi2_inv_sum
-            #         site_weight = site_chi2_inv_sum / chi2_inv_sum
-            #     else:
-            #         hist_weight = 0.5
-            #         site_weight = 0.5
-
-            #     external_predictions = (
-            #         hist_weight * projected_hist_price + site_weight * projected_site_price
-            #     )
-            #     # Go through and use the current prices when appropriate
-            #     use_lowess = drafted.shape[0] >= 7
-            #     use_polyfit = (drafted.shape[0] > 0) & (~use_lowess)
-            #     # Lowess struggles when there are fewer than 7 data points
-            #     if use_lowess:
-            #         sort_mask = np.argsort(curr_rank.values)
-            #         curr_model.fit(
-            #             np.array(curr_rank.values[sort_mask]),
-            #             np.array(curr_price[sort_mask]),
-            #             frac=0.5,
-            #         )
-            #         sort_mask = np.argsort(all_curr_rank)
-            #         curr_predictions = np.clip(
-            #             curr_model.predict(all_curr_rank[sort_mask]), 1, None
-            #         )
-            #         # ax.scatter(curr_rank, curr_price, zorder=5)
-            #         # ax.scatter(all_curr_rank[sort_mask], curr_predictions, zorder=5)
-            #     elif use_polyfit:
-            #         curr_predictions = np.ones(len(all_curr_rank))
-            #     undrafted_ranks = undrafted["Rank"].values
-            #     closest_rank_range = 3
-
-            #     projected_price = np.zeros(len(all_curr_rank))
-            #     pos_lb = 1
-            #     pos_ub = max(all_curr_rank)
-            #     for i, rank in enumerate(all_curr_rank):
-            #         # Check how many drafted players are within the range of the rank
-            #         lb = rank - closest_rank_range
-            #         ub = rank + closest_rank_range
-            #         # Number of drafted players within the range of the undrafted
-            #         # player's rank
-            #         if drafted.shape[0] > 0:
-            #             near_neighbors = (curr_rank >= lb) & (curr_rank <= ub)
-            #             n_near_neighbors = sum(near_neighbors)
-            #             max_n = min(pos_ub, ub) - max(pos_lb, lb)
-            #             neighbor_coverage = n_near_neighbors / max_n
-            #             if use_lowess:
-            #                 if neighbor_coverage == 1:
-            #                     extern_weight = 0.05
-            #                     curr_weight = 0.95
-            #                 elif neighbor_coverage == 0:
-            #                     extern_weight = 1
-            #                     curr_weight = 0
-            #                 else:
-            #                     extern_weight = 1 - neighbor_coverage
-            #                     curr_weight = neighbor_coverage
-            #                 # projected_price[i] = (
-            #                 #     curr_weight * curr_predictions[i]
-            #                 #     + extern_weight * external_predictions[i]
-            #                 # )
-            #             elif use_polyfit:
-            #                 near_neighbor_ranks = curr_rank[near_neighbors]
-            #                 near_neighbor_prices = curr_price[near_neighbors]
-            #                 if (
-            #                     np.any(near_neighbor_ranks < rank)
-            #                     and np.any(near_neighbor_ranks > rank)
-            #                     and neighbor_coverage > 0.5
-            #                 ):
-            #                     # if neighbor_coverage > 0.5:
-            #                     # If there are points on either side then use the polynomial fit
-            #                     z = np.polyfit(near_neighbor_ranks, near_neighbor_prices, 1)
-            #                     p = np.poly1d(z)
-            #                     curr_predictions[i] = p(rank)
-            #                     extern_weight = 1 - neighbor_coverage
-            #                     curr_weight = neighbor_coverage
-            #                 else:
-            #                     extern_weight = 1
-            #                     curr_weight = 0
-            #             projected_price[i] = (
-            #                 curr_weight * curr_predictions[i]
-            #                 + extern_weight * external_predictions[i]
-            #             )
-            #         else:
-            #             projected_price[i] = external_predictions[i]
-
-            #     # ax.set_title(f"{pos}")
-            #     current_draft_excess_price += sum(projected_price) - len(projected_price)
-            #     self.draft_df["Proj$"] = projected_price
-            #     # ud_projected_hist_price = np.clip(
-            #     #     hist_model.predict(undrafted["Rank"].values), 1, None
-            #     # )
-            #     # ud_projected_site_price = np.clip(undrafted["Site"].values, 1, None)
-            #     # ud_projected_prices = (
-            #     #     hist_weight * ud_projected_hist_price
-            #     #     + site_weight * ud_projected_site_price
-            #     # )
-            #     ud_inds = np.array(undrafted.index)
-            #     # ud_inds = ud_inds - min(ud_inds)
-            #     ud_projected_prices = projected_price[ud_inds]
-            #     # if pos == "TE":
-            #     #     breakpoint()
-            #     # drafted_colors = drafted[]
 
             # TESTING NEW MODEL
             hist_ppw = self.league_hist_data["hist_ppw"]
@@ -1805,15 +1829,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 X = np.vstack([X, drafted_X])
                 drafted_prices = self.draft_df.loc[drafted_inds, "Draft$"].values
                 y = np.concatenate([y, drafted_prices])
-                # y.extend(drafted_prices)
-                # y = np.stack([y, drafted_prices])
-            # est = GradientBoostingRegressor(
-            #     loss="huber",
-            #     n_estimators=100,
-            #     learning_rate=0.1,
-            #     max_depth=3,
-            # )
-            est = LassoLarsIC(criterion="bic", max_iter=1000)
+            est = LassoLarsIC(criterion="aic", max_iter=1000)
             est.fit(X, y)
             undrafted_inds = undrafted.index
             curr_ppw = self.draft_df.loc[undrafted_inds, "PPW"].values
@@ -1827,11 +1843,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             ).T
             new_predicted_price = est.predict(curr_X)
             self.draft_df.loc[undrafted_inds, "Proj$"] = new_predicted_price
-            # params = est.coef_
-
-            # new_model.fit(hist_rank.reshape(-1, 1), hist_price)
-            # Data values: Site price, site rank, expected games played
-            # expected ppw
+            undrafted.loc[:, "Proj$"] = new_predicted_price
 
             all_points = []
             labels = {}
@@ -1854,7 +1866,6 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 )
                 otherdnames = other_drafted["Name"].values
                 all_points.append(otherdpoints)
-                # all_names.append(otherdnames)
                 labels[otherdpoints] = otherdnames
                 my_drafted = drafted.loc[drafted["Drafted"] == 2]
                 my_dcolors = [self.ta_colors.get(ta) for ta in my_drafted["T/A"].values]
@@ -1867,28 +1878,22 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                     c=my_dcolors,
                     marker="*",
                     s=40,
-                    # edgecolor=my_dcolors[0],
-                    # alpha=1,
                 )
                 mydnames = my_drafted["Name"].values
                 all_points.append(mydpoints)
                 labels[mydpoints] = mydnames
-                # all_names.append(mydnames)
-                # for rank, price, color in zip(
-                #     my_drafted["Rank"].values, my_drafted["Draft$"].values, my_dcolors
-                # ):
-                #     ax.axvline(
-                #         rank,
-                #         c=my_dcolors[0],
-                #         zorder=0
-                #         # price,
-                #         # marker="s",
-                #         # s=25,
-                #         # edgecolor="k",
-                #         # alpha=0.5,
-                #     )
+            # Plot the point per dollars as colors
+            price_diff = undrafted["Proj$"].values - undrafted["Site"].values
+            price_norm = mpl.colors.Normalize(
+                vmin=price_diff.min(), vmax=price_diff.max()
+            )
+            red_green_cmap = plt.get_cmap("RdYlGn")
+            ud_price_colors = red_green_cmap(price_norm(price_diff))
+
             udcolors = [self.ta_colors.get(ta) for ta in undrafted["T/A"].values]
-            udcolors = [c if c is not None else self.empty_color for c in udcolors]
+            udcolors = [
+                c if c is not None else c2 for c, c2 in zip(udcolors, ud_price_colors)
+            ]
             udpoints = ax.scatter(
                 self.draft_df.loc[undrafted_inds, "Rank"],
                 self.draft_df.loc[undrafted_inds, "Proj$"],
@@ -1897,6 +1902,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 facecolors=udcolors,
                 edgecolors="k",
             )
+            ax.set_xlabel("Projected rank")
+            ax.set_ylabel("Projected price")
             udnames = self.draft_df.loc[undrafted_inds, "Name"].values
             # all_names = self.draft_df["Name"].values
             # all_points.append(udpoints)
@@ -1956,7 +1963,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         neg_oc = initial_opp_costs[initial_opp_costs < 0]
         # neg_oc = np.any(np.array(initial_opp_costs) < 0)
         if len(pos_oc) != 0 and len(neg_oc) != 0:
-            # Test all prices between the two 
+            # Test all prices between the two
             last_neg_price = initial_prices[initial_opp_costs < 0][-1]
             first_pos_price = initial_prices[initial_opp_costs > 0][0]
             new_prices = np.arange(last_neg_price, first_pos_price, 1)
@@ -1988,19 +1995,46 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         return np.array(opp_costs)
 
     def select_player(self, player_name):
-        ax = self.pax
+        if self.sport == "nfl":
+            player_pos = self.draft_df.loc[
+                self.draft_df["Name"] == player_name
+            ].Position.values[0]
+            positions = ["QB", "RB", "WR", "TE"]
+            if player_pos not in positions:
+                return 0
+            pos_ind = positions.index(player_pos)
+            ax = self.pax.flatten()[pos_ind]
+            for i, _ax in enumerate(self.pax.flatten()):
+                if i != pos_ind and len(_ax.patches) > 0:
+                    _ax.patches[0].remove()
+        elif self.sport == "nba":
+            ax = self.pax
         if len(ax.patches):
             ax.patches[0].remove()
-        player_ind = self.draft_df.loc[
-            self.draft_df["Name"] == player_name
-        ].index
+        player_ind = self.draft_df.loc[self.draft_df["Name"] == player_name].index
         player_rank = self.draft_df.loc[player_ind, "Rank"].values[0]
         player_price = self.draft_df.loc[player_ind, "Proj$"].values[0]
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+
+        # Get display aspect ratio based on the axes' size
+        bbox = ax.get_window_extent().transformed(
+            self.p_canvas.figure.dpi_scale_trans.inverted()
+        )
+        display_width, display_height = bbox.width, bbox.height
+        display_aspect_ratio = display_height / display_width
+
+        # Define a fixed size for the square in display units
+        square_display_size = 0.04  # This is the fraction of the display size
+
+        # Calculate the size in data units to ensure the rectangle remains a square
+        square_width = (x_max - x_min) * square_display_size * display_aspect_ratio
+        square_height = (y_max - y_min) * square_display_size
         ax.add_patch(
             patches.Rectangle(
-                xy=(player_rank - 1.2, player_price - 1.1),
-                width=2.4,
-                height=2.2,
+                xy=(player_rank - square_width / 2, player_price - square_height / 2),
+                width=square_width,
+                height=square_height,
                 facecolor="none",
                 edgecolor="r",
                 mouseover=True,
@@ -2009,15 +2043,30 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.p_canvas.draw()
 
     def highlight_player(self, player_name, color):
-        ax = self.pax
+        if self.sport == "nfl":
+            player_pos = self.draft_df.loc[
+                self.draft_df["Name"] == player_name
+            ].Position.values[0]
+            positions = ["QB", "RB", "WR", "TE"]
+            if player_pos not in positions:
+                return 0
+            pos_ind = positions.index(player_pos)
+            ax = self.pax.flatten()[pos_ind]
+        elif self.sport == "nba":
+            ax = self.pax
         if len(ax.patches):
             ax.patches[0].remove()
-        player_ind = self.draft_df.loc[
-            self.draft_df["Name"] == player_name
-        ].index
+        player_ind = self.draft_df.loc[self.draft_df["Name"] == player_name].index
         player_rank = self.draft_df.loc[player_ind, "Rank"].values[0]
         player_price = self.draft_df.loc[player_ind, "Proj$"].values[0]
-        ax.scatter(player_rank, player_price, marker='o', s=20, edgecolor=color, facecolor='none')
+        ax.scatter(
+            player_rank,
+            player_price,
+            marker="o",
+            s=20,
+            edgecolor=color,
+            facecolor="none",
+        )
         # ax.add_patch(
         #     patches.Rectangle(
         #         xy=(player_rank - 1.5, player_price - 1.5),
@@ -2070,14 +2119,14 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             cmap=cmap,
             norm=norm,
             edgecolor="k",
-            zorder=3
+            zorder=3,
         )
         self.oc_ax.set_xlabel("Paid price")
         self.oc_ax.set_ylabel("Opportunity cost")
         self.oc_ax.xaxis.set_major_locator(MultipleLocator(10))
         self.oc_ax.xaxis.set_minor_locator(AutoMinorLocator(5))
-        self.oc_ax.grid(which='major', color='#CCCCCC', linestyle='--', zorder=0)
-        self.oc_ax.grid(which='minor', color='#CCCCCC', linestyle=':', zorder=0)
+        self.oc_ax.grid(which="major", color="#CCCCCC", linestyle="--", zorder=0)
+        self.oc_ax.grid(which="minor", color="#CCCCCC", linestyle=":", zorder=0)
         self.oc_ax.axhline(0, color="k", ls="-", zorder=1)
         # self.oc_canvas.draw()
         # Set up linear fit to find the root
@@ -2105,15 +2154,19 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         if len(pos_oc) != 0 and len(neg_oc) != 0:
             final_neg_ind = np.where(np.array(opp_costs) < 0)[0][-1]
             title += f" - Draft at or below ${test_prices[final_neg_ind]:.2f}"
-        elif len(pos_oc) == len(opp_costs):# np.sign(p(min_price)) > 0 and np.sign(p(max_price)) > 0:
+        elif len(pos_oc) == len(
+            opp_costs
+        ):  # np.sign(p(min_price)) > 0 and np.sign(p(max_price)) > 0:
             title += " - Probably not worth it"
-        elif len(neg_oc) == len(opp_costs):#np.sign(p(min_price)) < 0 and np.sign(p(max_price)) < 0:
+        elif len(neg_oc) == len(
+            opp_costs
+        ):  # np.sign(p(min_price)) < 0 and np.sign(p(max_price)) < 0:
             title += " - Draft for any price"
         else:
             title += " - How is this possible"
         # Plot the projected price
         ibp = int(round(base_price, 0))
-        self.oc_ax.scatter(ibp, p(ibp), edgecolor='b', c=p(ibp), zorder=5)
+        self.oc_ax.scatter(ibp, p(ibp), edgecolor="b", c=p(ibp), zorder=5)
         if len(too_expensive):
             self.oc_ax.axvline(min(too_expensive), color="r", ls="--")
         self.oc_ax.set_title(title)
@@ -2260,7 +2313,6 @@ def find_optimal_team_sat(
     draft_state_df = draft_state_df.loc[draft_state_df["Drafted"] != 1].reset_index(
         drop=True
     )
-
     if sport == "nfl":
         # Set up starter/bench booleans
         starter_bools = []
@@ -2280,8 +2332,13 @@ def find_optimal_team_sat(
             + league_roster["WR"]
             + league_roster["TE"]
             + league_roster["FLEX"]
+            + league_roster["DL"]
+            + league_roster["LB"]
+            + league_roster["DB"]
+            + league_roster["IDP"]
             + league_roster["B"]
         )
+        # n_team = sum(league_roster.values())
         model.Add(sum(starter_bools) + sum(bench_bools) == n_team)
         # Positional constraints
         nf = league_roster["FLEX"]
@@ -2291,34 +2348,32 @@ def find_optimal_team_sat(
             + league_roster["TE"]
             + league_roster["FLEX"]
         )
-        n_drafted_qb = draft_state_df.loc[
-            (draft_state_df["Drafted"] == 2) & (draft_state_df["Position"] == "QB")
-        ].shape[0]
-        n_drafted_rb = draft_state_df.loc[
-            (draft_state_df["Drafted"] == 2) & (draft_state_df["Position"] == "RB")
-        ].shape[0]
-        n_drafted_wr = draft_state_df.loc[
-            (draft_state_df["Drafted"] == 2) & (draft_state_df["Position"] == "WR")
-        ].shape[0]
-        n_drafted_te = draft_state_df.loc[
-            (draft_state_df["Drafted"] == 2) & (draft_state_df["Position"] == "TE")
-        ].shape[0]
-        n_drafted_flex = draft_state_df.loc[
-            (draft_state_df["Drafted"] == 2)
-            & (draft_state_df["Position"].isin(["RB", "WR", "TE"]))
-        ].shape[0]
+        n_idp = (
+            league_roster["DL"]
+            + league_roster["LB"]
+            + league_roster["DB"]
+            + league_roster["IDP"]
+        )
 
         qb_target_terms = []
         rb_target_terms = []
         wr_target_terms = []
         te_target_terms = []
         flex_target_terms = []
+        dl_target_terms = []
+        lb_target_terms = []
+        db_target_terms = []
+        idp_target_terms = []
         bench_target_terms = []
         qb_terms = []
         rb_terms = []
         wr_terms = []
         te_terms = []
         flex_terms = []
+        dl_terms = []
+        lb_terms = []
+        db_terms = []
+        idp_terms = []
         bench_terms = []
         for i, player in draft_state_df.iterrows():
             pos = player["Position"]
@@ -2330,12 +2385,22 @@ def find_optimal_team_sat(
                 flex_target_terms.append(
                     starter_bools[i] * int(pos in ["RB", "WR", "TE"])
                 )
+                dl_target_terms.append(starter_bools[i] * int(pos == "DL"))
+                lb_target_terms.append(starter_bools[i] * int(pos == "LB"))
+                db_target_terms.append(starter_bools[i] * int(pos == "DB"))
+                idp_target_terms.append(
+                    starter_bools[i] * int(pos in ["DL", "LB", "DB"])
+                )
                 bench_target_terms.append(bench_bools[i] * int(pos in ["RB", "WR"]))
             qb_terms.append(starter_bools[i] * int(pos == "QB"))
             rb_terms.append(starter_bools[i] * int(pos == "RB"))
             wr_terms.append(starter_bools[i] * int(pos == "WR"))
             te_terms.append(starter_bools[i] * int(pos == "TE"))
             flex_terms.append(starter_bools[i] * int(pos in ["RB", "WR", "TE"]))
+            dl_terms.append(starter_bools[i] * int(pos == "DL"))
+            lb_terms.append(starter_bools[i] * int(pos == "LB"))
+            db_terms.append(starter_bools[i] * int(pos == "DB"))
+            idp_terms.append(starter_bools[i] * int(pos in ["DL", "LB", "DB"]))
             bench_terms.append(bench_bools[i] * int(pos in ["RB", "WR"]))
 
         model.Add(sum(bench_terms) == league_roster["B"])
@@ -2351,6 +2416,17 @@ def find_optimal_team_sat(
         model.Add(sum(te_terms) <= league_roster["TE"] + nf)
 
         model.Add(sum(flex_terms) == n_flex)
+
+        model.Add(sum(dl_terms) >= league_roster["DL"])
+        model.Add(sum(dl_terms) <= league_roster["DL"] + n_idp)
+
+        model.Add(sum(lb_terms) >= league_roster["LB"])
+        model.Add(sum(lb_terms) <= league_roster["LB"] + n_idp)
+
+        model.Add(sum(db_terms) >= league_roster["DB"])
+        model.Add(sum(db_terms) <= league_roster["DB"] + n_idp)
+
+        model.Add(sum(idp_terms) == n_idp)
 
         model.Add(sum(bench_terms) == league_roster["B"])
 
@@ -2404,7 +2480,7 @@ def find_optimal_team_sat(
                     bench.append(player["Name"])
             starters.extend(bench)
             opt_team = create_team_df(
-                starters, league_roster, draft_state_df, team_cols
+                starters, league_roster, draft_state_df, team_cols, sport
             )
         else:
             opt_team = None
@@ -2424,10 +2500,23 @@ def find_optimal_team_sat(
         for i, player in draft_state_df.iterrows():
             player_var = model.NewBoolVar(f"{player.Name}")
             player_vars.append(player_var)
+        starter_bools = []
+        bench_bools = []
+        for i, player in draft_state_df.iterrows():
+            player_var = player_vars[i]
+            starter_bool = model.NewBoolVar(f"{player.Name} is starter")
+            starter_bools.append(starter_bool)
+
+            bench_bool = model.NewBoolVar(f"{player.Name} is on bench")
+            bench_bools.append(bench_bool)
+
+            model.Add(starter_bool + bench_bool == player_var)
 
         # Number of players on team must equal the roster_size
         # minus one (for a streamer player)
-        model.Add(sum(player_vars) == n_team)
+        # model.Add(sum(player_vars) == n_team)
+        model.Add(sum(starter_bools) + sum(bench_bools) == n_team)
+        model.Add(sum(bench_bools) == 3)
 
         # Positional constraints
         pg_target_terms = []
@@ -2484,8 +2573,18 @@ def find_optimal_team_sat(
         # streamer_terms = []
         # for i, player in draft_state_df.iterrows():
         #     streamer_terms.append(player_vars[i] * (player["Proj$"] <= 1))
-        # model.Add(sum(streamer_terms) == 1)
+        # model.Add(sum(streamer_terms) == 2)
 
+        expected_discount = 15
+        players_drafted = sum(draft_state_df["Drafted"] == 2)
+        players_remaining = n_team - players_drafted
+        if players_remaining <= 5:
+            # When there are 5 spots left, the discount should be 0
+            remaining_discount = 0
+        else:
+            discount_per_pick = expected_discount / (players_remaining - 5)
+            remaining_discount = expected_discount - discount_per_pick * players_drafted
+            remaining_discount = max(0, remaining_discount)
         # On team and price constraints
         player_price_terms = []
         for i, player in draft_state_df.iterrows():
@@ -2502,11 +2601,19 @@ def find_optimal_team_sat(
                     player_vars[i] * max(int(round(player["Proj$"], 0)), 1)
                 )
         # Less than the total budget, leaving 1 dollar for the streamer
-        model.Add(sum(player_price_terms) <= auction_budget)
+        model.Add(sum(player_price_terms) <= int(auction_budget + remaining_discount))
 
         player_values = []
+        starter_games = 3.5
+        bench_games = 3
         for i, player in draft_state_df.iterrows():
-            player_values.append(player_vars[i] * int(1000 * player.PPW))
+            # player_values.append(player_vars[i] * int(1000 * player.PPW))
+            # Idea here is that starters will play more than bench players by
+            # 0.5 games per week
+            player_values.append(starter_bools[i] * int(1000 * player.PPW))
+            player_values.append(
+                bench_bools[i] * int(1000 * player.PPW * bench_games / starter_games)
+            )
         model.Maximize(sum(player_values))
 
         solver = cp_model.CpSolver()
@@ -2533,8 +2640,17 @@ def find_optimal_team_sat(
 def create_team_df(player_names, league_roster, draft_df, team_cols, sport):
     if sport == "nfl":
         relevant_positions = ["QB", "RB", "WR", "TE", "FLEX", "B"]
+        # Add IDP positions
+        if league_roster["DL"] > 0:
+            relevant_positions.insert(-1, "DL")
+        if league_roster["LB"] > 0:
+            relevant_positions.insert(-1, "LB")
+        if league_roster["DB"] > 0:
+            relevant_positions.insert(-1, "DB")
+        if league_roster["IDP"] > 0:
+            relevant_positions.insert(-1, "IDP")
         relevant_roster_size = sum([league_roster[pos] for pos in relevant_positions])
-        relevant_positions = ["QB", "RB", "WR", "TE", "FLEX", "B"]
+        # relevant_positions = ["QB", "RB", "WR", "TE", "FLEX", "B"]
         league_positions = []
         league_position_numbers = []
         for pos, n_required in league_roster.items():
@@ -2577,10 +2693,27 @@ def create_team_df(player_names, league_roster, draft_df, team_cols, sport):
         player_df.loc[player_df["FLEX_eligible"], "FLEX rank"] = player_df.loc[
             player_df["FLEX_eligible"], "PPW"
         ].rank(ascending=False)
+        player_df["IDP_eligible"] = np.zeros(player_df.shape[0], dtype=bool)
+        IDP_positions = ["DL", "LB", "DB"]
+        for pos in IDP_positions:
+            IDP_mask = (player_df["Position"] == pos) & (
+                player_df["Position rank"] > league_roster[pos]
+            )
+            pos_IDP = player_df.loc[IDP_mask]
+
+            if not pos_IDP.empty:
+                player_df.loc[IDP_mask, "IDP_eligible"] = np.repeat(
+                    True, pos_IDP.shape[0]
+                )
+        player_df.loc[player_df["IDP_eligible"], "IDP rank"] = player_df.loc[
+            player_df["IDP_eligible"], "PPW"
+        ].rank(ascending=False)
         used_players = []
         for pos, rank in zip(league_positions, league_position_numbers):
             if pos == "FLEX":
                 player = player_df.loc[(player_df["FLEX rank"] == rank)]
+            elif pos == "IDP":
+                player = player_df.loc[(player_df["IDP rank"] == rank)]
             else:
                 player = player_df.loc[
                     (player_df.Position == pos) & (player_df["Position rank"] == rank)
@@ -2594,6 +2727,7 @@ def create_team_df(player_names, league_roster, draft_df, team_cols, sport):
                         col,
                     ] = player[col].values[0]
                 used_players.append(player["Name"].values[0])
+
         # Add bench players
         remaining_players = [name for name in player_names if name not in used_players]
         if len(remaining_players) > 0:

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["scikit-build-core>=0.7", "nanobind>=1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "auction-draft-tool"
+version = "2.0.0"
+description = "An agent-based auction draft tool with a high-performance C++ core."
+requires-python = ">=3.9"
+
+dependencies = ["pyqt5", "matplotlib", "numpy", "pandas", "ortools"]
+
+[project.scripts]
+# This defines the 'auction-tool' command to run your app
+auction-tool = "package.__main__:main"
+
+[tool.scikit-build]
+# This tells scikit-build where to find the CMakeLists.txt for your extension
+cmake.source-dir = "package/simulation_core"
+
+# This tells scikit-build that your Python code is in the 'package' directory
+wheel.packages = ["package"]

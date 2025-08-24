@@ -1,0 +1,1 @@
+This directory will house the classes that manage the application's state and handle data transformations. This is the first step in decoupling your core logic from the UI.

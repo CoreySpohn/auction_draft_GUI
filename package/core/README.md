@@ -1,0 +1,1 @@
+This directory is for the primary orchestration logic that drives the application's analytical capabilities.
