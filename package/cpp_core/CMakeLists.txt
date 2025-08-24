@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.15...3.27)
 
 # Declare the project name
-project(simulation_core LANGUAGES CXX)
+project(cpp_core LANGUAGES CXX)
 
 if (NOT SKBUILD)
   message(WARNING "\
@@ -19,8 +19,8 @@ if (NOT SKBUILD)
   in your environment once and use the following command that avoids
   a costly creation of a new virtual environment at every compilation:
   =====================================================================
-   $ pip install nanobind scikit-build-core[pyproject]
-   $ pip install --no-build-isolation -ve .
+   $ uv pip install nanobind scikit-build-core[pyproject]
+   $ uv pip install --no-build-isolation -ve .
   =====================================================================
   You may optionally add -Ceditable.rebuild=true to auto-rebuild when
   the package is imported. Otherwise, you need to re-run the above
@@ -33,7 +33,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find the Python interpreter and development libraries from the active environment
 # This is a critical step. The 'Development.Module' component is required by nanobind
-find_package(Python 3.12 
+find_package(Python 3.13 
     REQUIRED COMPONENTS Interpreter Development.Module
     OPTIONAL_COMPONENTS Development.SABIModule)
 
@@ -53,7 +53,7 @@ find_package(nanobind CONFIG REQUIRED)
 # The first argument, 'simulation_core', is the name of the output file (e.g., simulation_core.so)
 # This name MUST match the first argument of the NB_MODULE macro in bindings.cpp
 nanobind_add_module(
-    simulation_core_ext
+    cpp_core
     
     # By default nanobind optimizes for size with the (-Os) flag
     # NOMINSIZE is a flag that tells the compiler to optimize for speed (-O3)
@@ -81,6 +81,6 @@ nanobind_add_module(
 
 # Install directive for scikit-build-core
 install(
-    TARGETS simulation_core_ext
-    LIBRARY DESTINATION simulation_core
+    TARGETS cpp_core
+    LIBRARY DESTINATION .
 )
