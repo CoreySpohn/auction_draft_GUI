@@ -8,14 +8,27 @@ version = "2.0.0"
 description = "An agent-based auction draft tool with a high-performance C++ core."
 requires-python = ">=3.12"
 
-dependencies = ["nanobind", "pyqt5", "matplotlib", "numpy", "pandas", "ortools"]
+dependencies = [
+    "nanobind",
+    "pyqt5",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "ortools",
+    "requests",
+    "mplcursors",
+    "scipy",
+    "selenium",
+    "moepy",
+    "lxml",
+]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"
 wheel.py-api = "cp312"
-cmake.source-dir = "package/cpp_core"
 wheel.packages = ["package"]
+cmake.source-dir = "package/cpp_core"
 cmake.args = ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
 
 [tool.cibuildwheel]

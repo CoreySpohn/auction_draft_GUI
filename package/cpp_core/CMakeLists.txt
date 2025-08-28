@@ -4,6 +4,25 @@ cmake_minimum_required(VERSION 3.15...3.27)
 # Declare the project name
 project(cpp_core LANGUAGES CXX)
 
+# Bring in fmt using CMake's FetchContent (no system dependency required)
+include(FetchContent)
+set(FMT_GIT_TAG 11.2.0)
+FetchContent_Declare(
+  fmt
+  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+  GIT_TAG        ${FMT_GIT_TAG}
+)
+FetchContent_MakeAvailable(fmt)
+# Bring in Eigen using CMake's FetchContent (no system dependency required)
+include(FetchContent)
+set(EIGEN_GIT_TAG 3.4.0)
+FetchContent_Declare(
+  Eigen
+  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+  GIT_TAG        ${EIGEN_GIT_TAG}
+)
+FetchContent_MakeAvailable(Eigen)
+
 if (NOT SKBUILD)
   message(WARNING "\
   This CMake file is meant to be executed using 'scikit-build'. Running
@@ -33,7 +52,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find the Python interpreter and development libraries from the active environment
 # This is a critical step. The 'Development.Module' component is required by nanobind
-find_package(Python 3.13 
+find_package(Python 3.12 
     REQUIRED COMPONENTS Interpreter Development.Module
     OPTIONAL_COMPONENTS Development.SABIModule)
 
@@ -74,13 +93,31 @@ nanobind_add_module(
 
     # Reference all source code here
     src/bindings.cpp
+    src/agent.cpp
+    src/auction.cpp
+    src/simulator.cpp
+    src/test/hello.cpp
+    include/cpp_core/player.hpp
+    include/cpp_core/projection.hpp
+    include/cpp_core/agent.hpp
+    include/cpp_core/market.hpp
+    include/cpp_core/draft_state.hpp
+    include/cpp_core/auction.hpp
+    include/cpp_core/simulator.hpp
     # Add other.cpp files here as they are created, e.g.:
     # src/Agent.cpp
     # src/Simulation.cpp
 )
+
+# Link fmt (header-only) to the extension module to avoid extra linkage
+target_link_libraries(cpp_core PRIVATE fmt::fmt-header-only)
+target_link_libraries(cpp_core PRIVATE Eigen3::Eigen)
 
 # Install directive for scikit-build-core
 install(
     TARGETS cpp_core
     LIBRARY DESTINATION .
 )
+
+# Make public headers available as #include "cpp_core/..."
+target_include_directories(cpp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

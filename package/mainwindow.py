@@ -22,16 +22,43 @@ from ortools.sat.python import cp_model
 from PyQt5 import QtCore as qtc
 from PyQt5 import QtGui as qtg
 from PyQt5 import QtWidgets as qtw
-from scipy.optimize import root_scalar
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Lasso, LassoLarsIC
-from sklearn.tree import DecisionTreeRegressor
+import os
 
 from package.ui.mainwindow_ui import Ui_Form
+from package.services.projections import load_fantasypros_nfl
+from package.services.players import build_player_table_from_csv
+from cpp_core import ProjectionTable, FantasyPointsProjection, Triangular
+from package.services.sleeper import build_combined_config
+from package.services.draft_sync import SleeperDraftSync
+from package.services.league import SleeperLeagueState
+from package.services.sleeper import get_league_auction_values_with_ranks
+from package.services.forecast_adapter import (
+    default_position_map,
+    build_draft_state,
+    run_simulation,
+    compute_vorp_prices,
+)
+
+# Actual draft ID
+# 2025 Draft ID
+SLEEPER_LEAGUE_ID = "1254970896590839808"
+SLEEPER_DRAFT_ID = "1254970896595025920"
+
+# 2024 Draft ID
+# SLEEPER_DRAFT_ID = "1124849414393831425"
+
+# MOCK DRAFT ID
+# SLEEPER_DRAFT_ID = "1266611276235145216"
+
+# Rookie Draft ID
+# SLEEPER_LEAGUE_ID = "1231652068087844864"
+# SLEEPER_DRAFT_ID = "1231652068096229376"
+SLEEPER_MY_USER_ID = "234467188247883776"
 
 
 class QCustomTableWidgetItem(qtw.QTableWidgetItem):
@@ -65,8 +92,6 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
         self.p_canvas = FigureCanvas(Figure(figsize=(5, 5)))
 
-        # self.ui.set.addWidget(self.oc_canvas, 1, 0, 1, 1)
-
         self.sport = "nfl"
         if self.sport == "nfl":
             # Set up position cost plots
@@ -77,13 +102,23 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.starter_percent = 0.97
             self.bench_percent = 1 - self.starter_percent
             self.assume_site_prices = False
-            self.prev_years = [2021, 2023]
+            self.prev_years = [2021, 2023, 2024]
             self.site_file = ".cache/sleeper_2024_3.csv"
 
-            # setup = "1QB"
+            # Try to load Sleeper settings from environment variables
+            self._sleeper_cfg = None
+            if SLEEPER_LEAGUE_ID and SLEEPER_DRAFT_ID:
+                try:
+                    self._sleeper_cfg = build_combined_config(
+                        SLEEPER_LEAGUE_ID, SLEEPER_DRAFT_ID
+                    )
+                except Exception:
+                    self._sleeper_cfg = None
+
             setup = "1IDP"
             self.is_IDP = True
             self.te_premium = True
+            self.te_premium_bonus = 0.5
             self.scoring_coeffs = {
                 "PASSING_ATT": 0,
                 "PASSING_CMP": 0,
@@ -108,36 +143,55 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 "FF": 0,
                 "FR": 4,
             }
-            if setup == "1IDP":
+            self.league_roster = {
+                "QB": 1,
+                "RB": 2,
+                "WR": 3,
+                "TE": 1,
+                "FLEX": 2,
+                "K": 1,
+                "DEF": 1,
+                "DL": 0,
+                "LB": 0,
+                "DB": 0,
+                "IDP": 2,
+                "B": 7,
+            }
+            # Override defaults with Sleeper config if available
+            if self._sleeper_cfg:
+                cfg = self._sleeper_cfg
+                self.teams = cfg.get("teams", self.teams) or self.teams
+                draft_cfg = cfg.get("draft", {}) or {}
+                self.auction_budget = int(
+                    draft_cfg.get("budget", self.auction_budget) or self.auction_budget
+                )
+                self.is_IDP = bool(cfg.get("idp_enabled", self.is_IDP))
+                self.te_premium = bool(cfg.get("te_premium", self.te_premium))
+                self.te_premium_bonus = float(
+                    cfg.get("te_premium_bonus", self.te_premium_bonus)
+                )
+                self.scoring_coeffs = (
+                    cfg.get("scoring_coeffs", self.scoring_coeffs)
+                    or self.scoring_coeffs
+                )
+                if self.is_IDP and cfg.get("def_scoring_coeffs"):
+                    self.def_scoring_coeffs = cfg["def_scoring_coeffs"]
+                counts = cfg.get("roster_counts", {}) or {}
                 self.league_roster = {
-                    "QB": 1,
-                    "RB": 2,
-                    "WR": 3,
-                    "TE": 1,
-                    "FLEX": 2,
-                    "K": 1,
-                    "DEF": 1,
-                    "DL": 0,
-                    "LB": 0,
-                    "DB": 0,
-                    "IDP": 1,
-                    "B": 7,
+                    "QB": int(counts.get("QB", self.league_roster.get("QB", 0))),
+                    "RB": int(counts.get("RB", self.league_roster.get("RB", 0))),
+                    "WR": int(counts.get("WR", self.league_roster.get("WR", 0))),
+                    "TE": int(counts.get("TE", self.league_roster.get("TE", 0))),
+                    "FLEX": int(counts.get("FLEX", self.league_roster.get("FLEX", 0))),
+                    "K": int(counts.get("K", self.league_roster.get("K", 0))),
+                    "DEF": int(counts.get("DEF", self.league_roster.get("DEF", 0))),
+                    "DL": int(counts.get("DL", self.league_roster.get("DL", 0))),
+                    "LB": int(counts.get("LB", self.league_roster.get("LB", 0))),
+                    "DB": int(counts.get("DB", self.league_roster.get("DB", 0))),
+                    "IDP": int(counts.get("IDP", self.league_roster.get("IDP", 0))),
+                    "B": int(counts.get("B", self.league_roster.get("B", 0))),
                 }
-            elif setup == "3IDP":
-                self.league_roster = {
-                    "QB": 1,
-                    "RB": 2,
-                    "WR": 3,
-                    "TE": 1,
-                    "FLEX": 2,
-                    "K": 1,
-                    "DEF": 0,
-                    "DL": 1,
-                    "LB": 1,
-                    "DB": 1,
-                    "IDP": 0,
-                    "B": 6,
-                }
+                # End Sleeper overrides
             self.relevant_starters = ["QB", "RB", "WR", "TE", "FLEX"]
             if self.is_IDP:
                 self.relevant_starters.extend(["DL", "LB", "DB", "IDP"])
@@ -163,7 +217,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.single_eligible_positions = ["QB", "RB", "WR", "TE"]
             if setup == "3IDP":
                 self.single_eligible_positions.extend(["DL", "LB", "DB"])
-            self.league_teams = 10
+            self.league_teams = self.teams
             self.flex_positions = ["RB", "WR", "TE"]
             # pos_bench_depth =
             self.relevant_positions = ["QB", "RB", "WR", "TE", "FLEX", "B"]
@@ -360,8 +414,14 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
         self.create_colors()
         if self.sport == "nfl":
+            # Build canonical player table and name->sleeper id map
+            self.player_table, self.merge_name_to_sid = build_player_table_from_csv(
+                Path(".cache/db_playerids.csv")
+            )
             self.get_nfldata()
             self.calc_fantasy_points()
+            self.create_projection_table()
+            self.sample_projection_table()
             self.calc_player_vorp()
             self.add_extra_cols()
             self.get_historic_price_data()
@@ -374,6 +434,11 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.get_historic_price_data()
             self.add_site_prices()
             self.calc_player_price()
+        # Debug demo simulation (optional)
+        # try:
+        #     self._debug_simulate_current_state(n_sims=50)
+        # except Exception as _e:
+        #     print("[Forecast] Demo failed:", _e)
         self.init_draft_board()
         # self.update_draft_board()
         self.init_team_table(self.ui.myTeamTable)
@@ -389,6 +454,11 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         self.ui.draftBoard.cellChanged.connect(self.on_draftBoardChanged)
         self.ui.exportButton.clicked.connect(self.export_draft)
         self.ui.importButton.clicked.connect(self.import_draft)
+
+        # Start live Sleeper sync if config and draft id are available
+        if self._sleeper_cfg and SLEEPER_DRAFT_ID:
+            self._init_sleeper_league()
+            self._start_sleeper_sync()
 
         # Find the optimal team after the draft
         # self.import_draft()
@@ -554,7 +624,17 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
         return team_df
 
     def get_my_team(self):
-        my_players = self.draft_df.loc[self.draft_df["Drafted"] == 2]["Name"].values
+        # Resolve my roster_id
+        my_roster_id = None
+        if hasattr(self, "_league_state") and self._league_state is not None:
+            my_roster_id = self._league_state.user_to_roster.get(
+                str(SLEEPER_MY_USER_ID)
+            )
+        my_players = (
+            self.draft_df.loc[self.draft_df["Drafted"] == my_roster_id]["Name"].values
+            if my_roster_id is not None
+            else []
+        )
         my_team = create_team_df(
             my_players, self.league_roster, self.draft_df, self.team_cols, self.sport
         )
@@ -884,143 +964,200 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             self.update_opt_team()
 
     def get_nfldata(self):
-        loc = Path(f".cache/raw_{datetime.date.today().strftime('%Y-%m-%d')}.p")
-        loc.parent.mkdir(exist_ok=True)
-        if loc.exists():
-            with open(loc, "rb") as f:
-                self.player_stats = pickle.load(f)
-        else:
-            driver = webdriver.Firefox()
-            positions = ["QB", "RB", "WR", "TE"]
-            avgdfs = []
-            highdfs = []
-            lowdfs = []
-            url_start = "https://www.fantasypros.com/nfl/projections/"
-            url_end = ".php?max-yes=true&min-yes=true&week=draft"
-            for position in positions:
-                url = f"{url_start}{position.lower()}{url_end}"
-                driver.get(url)
-                position_data = pd.read_html(driver.page_source)[0]
-                relevant_categories = ["PASSING", "RUSHING", "RECEIVING", "MISC"]
-                irrelevant_attributes = ["FPTS"]
-                avg_stats = {}
-                high_stats = {}
-                low_stats = {}
-                for i, row in position_data.iterrows():
-                    player_string = row[0]
-                    player_name = ""
-                    for i, _string_part in enumerate(player_string.split(" ")[:-1]):
-                        if i > 0:
-                            player_name += " "
-                        player_name += _string_part
-                    if player_name not in avg_stats.keys():
-                        avg_stats[player_name] = {"POSITION": position}
-                        high_stats[player_name] = {"POSITION": position}
-                        low_stats[player_name] = {"POSITION": position}
-                    for category, attribute in row.index.to_flat_index():
-                        stat_name = f"{category}_{attribute}"
-                        if (
-                            category in relevant_categories
-                            and attribute not in irrelevant_attributes
-                        ):
-                            row_string = row[category][attribute]
-                            # The average, high, and low values for the player
-                            # The table does not get easily read with pandas
-                            _row_strings = ["", "", ""]
-                            current_string_ind = 0
-                            transition = False
-                            for symbol in row_string:
-                                if symbol == ",":
-                                    continue
-                                _row_strings[current_string_ind] += symbol
-                                if transition:
-                                    current_string_ind += 1
-                                    transition = False
-                                if symbol == ".":
-                                    transition = True
-                            avg_stats[player_name][stat_name] = float(_row_strings[0])
-                            high_stats[player_name][stat_name] = float(_row_strings[1])
-                            low_stats[player_name][stat_name] = float(_row_strings[2])
-                avgdf = pd.DataFrame(avg_stats).T
-                highdf = pd.DataFrame(high_stats).T
-                lowdf = pd.DataFrame(low_stats).T
-                if position == "QB":
-                    avgdf["PASSING_INC"] = avgdf["PASSING_ATT"] - avgdf["PASSING_CMP"]
-                    highdf["PASSING_INC"] = (
-                        highdf["PASSING_ATT"] - highdf["PASSING_CMP"]
-                    )
-                    lowdf["PASSING_INC"] = lowdf["PASSING_ATT"] - lowdf["PASSING_CMP"]
-                avgdfs.append(avgdf)
-                highdfs.append(highdf)
-                lowdfs.append(lowdf)
-            _avg = pd.concat(avgdfs).fillna(value=0)
-            _avg.insert(0, "NAME", _avg.index)
-            _avg = _avg.reset_index(drop=True)
-
-            _high = pd.concat(highdfs).fillna(value=0)
-            _high.insert(0, "NAME", _high.index)
-            _high = _high.reset_index(drop=True)
-
-            _low = pd.concat(lowdfs).fillna(value=0)
-            _low.insert(0, "NAME", _low.index)
-            _low = _low.reset_index(drop=True)
-
-            # Dictionary mapping defensive positions to their respective IDs on fftoday
-            def_pos_ids = {"DL": 50, "LB": 60, "DB": 70}
-
-            def_avgdfs = []
-
-            url_template = "https://www.fftoday.com/rankings/playerproj.php?PosID={pos_id}&LeagueID="
-
-            for position, pos_id in def_pos_ids.items():
-                url = url_template.format(pos_id=pos_id)
-                driver.get(url)
-
-                # Get the table from the page
-                try:
-                    df = pd.read_html(driver.page_source)[1]
-                    position_data = df.iloc[11:, 1:].reset_index(drop=True)
-                    # Step 1: Set the first row (index 11) as the new column headers
-                    column_names = position_data.iloc[0].values
-                    column_names[0] = "Player"
-                    position_data.columns = column_names
-                    position_data = position_data.drop(position_data.index[0])
-                    position_data = position_data.reset_index(drop=True)
-
-                except ValueError:
-                    print(f"Could not find table for {position} at {url}")
+        cache_path = Path(f".cache/raw_{datetime.date.today().strftime('%Y-%m-%d')}.p")
+        self.player_stats = load_fantasypros_nfl(
+            cache_path=cache_path,
+            scoring_coeffs=self.scoring_coeffs,
+            te_premium=self.te_premium,
+            include_idp=self.is_IDP,
+            def_scoring_coeffs=self.def_scoring_coeffs if self.is_IDP else None,
+        )
+        # Add sleeper
+        stat_name_to_sleeper_id = {}
+        manual_position_corrections = {
+            "velus jones": "WR",
+            "ben vansumeren": "LB",
+            "bo melton": "CB",
+            "robbie ouzts": "RB",
+            "justin shorter": "WR",
+        }
+        manual_name_corrections = {
+            "nyheim miller-hines": "nyheim hines",
+            "joshua palmer": "josh palmer",
+            "dont'e thornton jr.": "donte thornton",
+            "dee eskridge": "dwayne eskridge",
+            "scotty miller": "scott miller",
+            "chig okonkwo": "chigoziem okonkwo",
+            "drew ogletree": "andrew ogletree",
+        }
+        ignore_players = ["keleki latu"]
+        fftoday_position_corrections = {
+            "DL": ["DE", "DT"],
+            "LB": ["ILB", "OLB"],
+            "DB": ["CB", "S"],
+        }
+        players_to_check = []
+        sorted_sleeper_ids = []
+        for player in self.player_stats["average"].iterrows():
+            _player_stats = player[1]
+            _name = " ".join(_player_stats["NAME"].lower().strip().split())
+            _first_name, _last_name = _name.split(" ")[:2]
+            if _name in ignore_players:
+                # Just ignore this player
+                stat_name_to_sleeper_id[_name] = None
+                sorted_sleeper_ids.append(None)
+                continue
+            # Suffix information
+            has_suffix = len(_name.split(" ")) > 2
+            if has_suffix:
+                _name_no_suffix = f"{_first_name} {_last_name}"
+            # Name without punctuation
+            _punct = [".", ",", "'"]
+            has_punct = any(p in _name for p in _punct)
+            if has_punct:
+                _name_no_punct = _name
+                for p in _punct:
+                    _name_no_punct = _name_no_punct.replace(p, "")
+            _pos = _player_stats["POSITION"]
+            if _name not in self.merge_name_to_sid:
+                if has_suffix and _name_no_suffix in self.merge_name_to_sid:
+                    _name = _name_no_suffix
+                elif has_punct and _name_no_punct in self.merge_name_to_sid:
+                    _name = _name_no_punct
+                elif _name in manual_name_corrections:
+                    _name = manual_name_corrections[_name]
+                else:
+                    players_to_check.append(_name)
+                    sorted_sleeper_ids.append(None)
                     continue
 
-                avg_stats = {}
+            _sleeper_id = self.merge_name_to_sid[_name]
+            _player = self.player_table.get_by_sleeper_id(_sleeper_id)
+            is_FA = _player.team == "FA"
+            if is_FA:
+                stat_name_to_sleeper_id[_name] = None
+                sorted_sleeper_ids.append(None)
+                continue
+            elif _player.position != _pos:
+                # Ignore free agents
+                _matching_players = [
+                    _p for _p in self.player_table.players() if _p.name.lower() == _name
+                ]
+                matching_positions = [_p.position == _pos for _p in _matching_players]
+                if any(matching_positions):
+                    _player_match = _matching_players[matching_positions.index(True)]
+                elif _name in manual_position_corrections:
+                    _player_match = _matching_players[0]
+                    _player_match.position = manual_position_corrections[_name]
+                elif _pos in fftoday_position_corrections.keys():
+                    # FFToday groups defensive positions into the IDP positions
+                    # DL, LB, DB. We need to check if the player is in the
+                    # IDP positions and if so, we need to find the matching
+                    # position
+                    possible_positions = fftoday_position_corrections[_pos]
+                    for pos in possible_positions:
+                        _matching_players = [
+                            _p
+                            for _p in self.player_table.players()
+                            if _p.name.lower() == _name
+                        ]
+                        matching_positions = [
+                            _p.position == pos for _p in _matching_players
+                        ]
+                        if any(matching_positions):
+                            _player_match = _matching_players[
+                                matching_positions.index(True)
+                            ]
+                            _player_match.position = pos
+                            break
+                else:
+                    # No matching position found
+                    players_to_check.append(_name)
+                    sorted_sleeper_ids.append(None)
+                    continue
 
-                for i, row in position_data.iterrows():
-                    player_name = row["Player"]
-                    if player_name == "Josh Allen":
-                        player_name = "Josh Allen DE"
+                stat_name_to_sleeper_id[_name] = _player_match.sleeper_id
+                sorted_sleeper_ids.append(_player_match.sleeper_id)
+            else:
+                stat_name_to_sleeper_id[_name] = _sleeper_id
+                sorted_sleeper_ids.append(_sleeper_id)
 
-                    if player_name not in avg_stats:
-                        avg_stats[player_name] = {"POSITION": position}
+        # Map the sorted sleeper ids to the player_stats
+        self.player_stats["average"]["sleeper_id"] = sorted_sleeper_ids
 
-                    # Populate the average stats, assuming relevant stats are columns
-                    for col in position_data.columns:
-                        if col not in ["Player", "Bye", "Tm", "FPts"]:
-                            avg_stats[player_name][col] = (
-                                float(row[col]) if pd.notna(row[col]) else 0
-                            )
-                avgdf = pd.DataFrame(avg_stats).T
+        avg = self.player_stats["average"][["NAME", "POSITION", "sleeper_id"]].copy()
+        for key in ["high", "low"]:
+            df = self.player_stats[key].copy()
+            # for col in ["NAME", "POSITION"]:
+            #     df[col] = df[col].str.strip().str.casefold()
+            df = df.merge(avg, on=["NAME", "POSITION"], how="left", validate="m:1")
+            self.player_stats[key] = df
+        self.filter_on_player_stats()
 
-                avgdfs.append(avgdf)
+    def filter_on_player_stats(self):
+        """Look at the player's that we've cut out."""
+        # Clean out nan values
+        self.player_stats["average"] = self.player_stats["average"].dropna()
+        self.player_stats["high"] = self.player_stats["high"].dropna()
+        self.player_stats["low"] = self.player_stats["low"].dropna()
+        # Drop all players with PPW below 5
+        avg_ppw_under_5 = self.player_stats["average"]["PPW"] < 5
+        sleeper_ids_under_5 = (
+            self.player_stats["average"].loc[avg_ppw_under_5, "sleeper_id"].values
+        )
+        self.player_stats["average"] = self.player_stats["average"][
+            ~self.player_stats["average"]["sleeper_id"].isin(sleeper_ids_under_5)
+        ]
+        self.player_stats["high"] = self.player_stats["high"][
+            ~self.player_stats["high"]["sleeper_id"].isin(sleeper_ids_under_5)
+        ]
+        self.player_stats["low"] = self.player_stats["low"][
+            ~self.player_stats["low"]["sleeper_id"].isin(sleeper_ids_under_5)
+        ]
 
-            driver.close()
+    def get_player_stat_player_ids(self):
+        """Get the player ids from the player_stats dataframe."""
+        return (
+            self.player_stats["average"][["sleeper_id"]]
+            .values.astype(int)
+            .flatten()
+            .tolist()
+        )
 
-            # Combine all the average dataframes
-            _avg = pd.concat(avgdfs).fillna(value=0)
-            _avg.insert(0, "NAME", _avg.index)
-            _avg = _avg.reset_index(drop=True)
+    def create_projection_table(self):
+        self.projection_table = ProjectionTable()
+        avg = self.player_stats["average"][
+            ["NAME", "POSITION", "sleeper_id", "PPW"]
+        ].copy()
+        high = self.player_stats["high"][
+            ["NAME", "POSITION", "sleeper_id", "PPW"]
+        ].copy()
+        low = self.player_stats["low"][["NAME", "POSITION", "sleeper_id", "PPW"]].copy()
+        for player in self.player_table.players():
+            # Get player stats from player_stats
+            sid = player.sleeper_id
+            if sid in avg.sleeper_id.values:
+                avg_projection = avg.loc[avg.sleeper_id == sid].PPW.values[0]
+            else:
+                continue
+            if sid in high.sleeper_id.values:
+                high_projection = high.loc[high.sleeper_id == sid].PPW.values[0]
+                low_projection = low.loc[low.sleeper_id == sid].PPW.values[0]
+            else:
+                # For FFToday players we only have the average projection so
+                # we'll just calculate a 10% range around the average
+                high_projection = avg_projection * 1.2
+                low_projection = avg_projection * 0.8
 
-            self.player_stats = {"average": _avg, "high": _high, "low": _low}
-            with open(loc, "wb") as f:
-                pickle.dump(self.player_stats, f)
+            _dist = Triangular(low_projection, avg_projection, high_projection)
+            _proj = FantasyPointsProjection(_dist, 2025, 0)
+            self.projection_table.set(player.sleeper_id, _proj)
+
+    def sample_projection_table(self, n_samples=100, seed=0):
+        player_ids = self.get_player_stat_player_ids()
+        samples = self.projection_table.sample_matrix(player_ids, n_samples, seed)
+        # Create a dataframe with the samples and player name as the index
+        self.projected_stats = pd.DataFrame(samples, index=player_ids)
 
     def get_nba_ppg(self):
         loc = Path(f".cache/raw_nba_{datetime.date.today().strftime('%Y-%m-%d')}.csv")
@@ -1292,7 +1429,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             # Setting up the draft dataframe
             # self.draft_df = copy.deepcopy(_df[["NAME", "POSITION", "PPW", "VORP"]])
             self.draft_df = copy.deepcopy(
-                _df[["NAME", "POSITION", "PPW", "Rank", "VORP"]]
+                _df[["NAME", "POSITION", "PPW", "Rank", "VORP", "sleeper_id"]]
             )
             # self.draft_df[['NAME', 'POSITION', 'VORP']]
             self.draft_df = self.draft_df.rename(
@@ -1385,23 +1522,61 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
 
     def add_site_prices(self):
         if self.sport == "nfl":
+            # Use Sleeper baseline values scaled to league budget when available
+            if self._sleeper_cfg:
+                values = None
+                try:
+                    values = get_league_auction_values_with_ranks(self._sleeper_cfg)
+                except Exception:
+                    values = None
+                if values:
+                    site_prices = []
+                    site_ranks = []
+                    for _, row in self.draft_df.iterrows():
+                        sid = row.get("sleeper_id")
+                        player_sinfo = values.get(int(sid)) if sid is not None else None
+                        if player_sinfo:
+                            site_prices.append(int(player_sinfo.get("value")))
+                            site_ranks.append(int(player_sinfo.get("rank")))
+                        else:
+                            site_prices.append(1)
+                            # Use the rank of the last player in the draft
+                            site_ranks.append(len(self.draft_df))
+
+                    self.draft_df["Site"] = site_prices
+                    self.draft_df["Site_rank"] = site_ranks
+                    return
+            # Fallback to legacy CSV
             price_adjustment = 1
+            pdf = pd.read_csv(self.site_file)
+
+            site_prices = []
+            for _, row in self.draft_df.iterrows():
+                name = row["Name"]
+                site_price = pdf.loc[pdf["Name"] == name]["Site"]
+                if len(site_price.values) == 0:
+                    site_prices.append(1)
+                else:
+                    site_prices.append(site_price.values[0] * price_adjustment)
+
+            self.draft_df["Site"] = site_prices
+            self.draft_df["Site_rank"] = self.draft_df["Site"].rank(ascending=False)
         elif self.sport == "nba":
             self.get_espn_avg_prices()
             price_adjustment = self.auction_budget / 200
-        pdf = pd.read_csv(self.site_file)
+            pdf = pd.read_csv(self.site_file)
 
-        site_prices = []
-        for _, row in self.draft_df.iterrows():
-            name = row["Name"]
-            site_price = pdf.loc[pdf["Name"] == name]["Site"]
-            if len(site_price.values) == 0:
-                site_prices.append(1)
-            else:
-                site_prices.append(site_price.values[0] * price_adjustment)
+            site_prices = []
+            for _, row in self.draft_df.iterrows():
+                name = row["Name"]
+                site_price = pdf.loc[pdf["Name"] == name]["Site"]
+                if len(site_price.values) == 0:
+                    site_prices.append(1)
+                else:
+                    site_prices.append(site_price.values[0] * price_adjustment)
 
-        self.draft_df["Site"] = site_prices
-        self.draft_df["Site_rank"] = self.draft_df["Site"].rank(ascending=False)
+            self.draft_df["Site"] = site_prices
+            self.draft_df["Site_rank"] = self.draft_df["Site"].rank(ascending=False)
 
     def get_espn_avg_prices(self):
         # Get the average prices from ESPN, taken from HashTag Basketball
@@ -1699,8 +1874,21 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
                 all_points = []
                 labels = {}
                 if not drafted.empty:
-                    other_drafted = drafted.loc[drafted["Drafted"] == 1]
-                    my_drafted = drafted.loc[drafted["Drafted"] == 2]
+                    my_roster_id = None
+                    if (
+                        hasattr(self, "_league_state")
+                        and self._league_state is not None
+                    ):
+                        my_roster_id = self._league_state.user_to_roster.get(
+                            str(SLEEPER_MY_USER_ID)
+                        )
+                    if my_roster_id is not None:
+                        my_mask = drafted["Drafted"] == my_roster_id
+                        my_drafted = drafted.loc[my_mask]
+                        other_drafted = drafted.loc[~my_mask]
+                    else:
+                        other_drafted = drafted
+                        my_drafted = pd.DataFrame(columns=drafted.columns)
                     other_dcolors = [
                         self.ta_colors.get(ta) for ta in other_drafted["T/A"].values
                     ]
@@ -1776,8 +1964,8 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             total_spent_budget = self.draft_df["Draft$"].sum()
             total_projected_budget = self.draft_df["Proj$"].sum()
             figtitle = (
-                f"\${total_spent_budget:.0f} of \${self.available_budget:.0f} spent. "
-                f"Currently projecting \${total_projected_budget:.0f} "
+                f"${total_spent_budget:.0f} of ${self.available_budget:.0f} spent. "
+                f"Currently projecting ${total_projected_budget:.0f} "
             )
             # if current_draft_excess_price > total_excess_budget:
             #     figtitle += "Expect discounts at end"
@@ -1848,8 +2036,18 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             all_points = []
             labels = {}
             if not drafted.empty:
-                other_drafted = drafted.loc[drafted["Drafted"] == 1]
-                my_drafted = drafted.loc[drafted["Drafted"] == 2]
+                my_roster_id = None
+                if hasattr(self, "_league_state") and self._league_state is not None:
+                    my_roster_id = self._league_state.user_to_roster.get(
+                        str(SLEEPER_MY_USER_ID)
+                    )
+                if my_roster_id is not None:
+                    my_mask = drafted["Drafted"] == my_roster_id
+                    my_drafted = drafted.loc[my_mask]
+                    other_drafted = drafted.loc[~my_mask]
+                else:
+                    other_drafted = drafted
+                    my_drafted = pd.DataFrame(columns=drafted.columns)
                 other_dcolors = [
                     self.ta_colors.get(ta) for ta in other_drafted["T/A"].values
                 ]
@@ -1926,7 +2124,7 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             )
             total_spent_budget = self.draft_df["Draft$"].sum()
             figtitle = (
-                f"\${total_spent_budget:.0f} of \${self.available_budget:.0f} spent"
+                f"${total_spent_budget:.0f} of ${self.available_budget:.0f} spent"
             )
             # if current_draft_excess_price > total_excess_budget:
             #     figtitle += "Expect discounts at end"
@@ -2187,6 +2385,235 @@ class MainWindow(qtw.QWidget):  # Would be something else if you didn't use widg
             zorder=2,
         )
         self.oc_canvas.draw()
+
+    def _start_sleeper_sync(self):
+        self._draft_sync = SleeperDraftSync(SLEEPER_DRAFT_ID)
+        # Seed any existing picks on first run
+        try:
+            seed_updates = self._draft_sync.poll_updates()
+            if seed_updates:
+                self._apply_sleeper_updates(seed_updates)
+                if hasattr(self, "_league_state") and self._league_state is not None:
+                    self._league_state.apply_updates(seed_updates)
+        except Exception:
+            pass
+        self._sync_timer = qtc.QTimer(self)
+        self._sync_timer.setInterval(2000)
+        self._sync_timer.timeout.connect(self._on_sync_timer)
+        self._sync_timer.start()
+
+    def _on_sync_timer(self):
+        try:
+            updates = self._draft_sync.poll_updates()
+        except Exception:
+            return
+        if not updates:
+            return
+        self._apply_sleeper_updates(updates)
+        if hasattr(self, "_league_state") and self._league_state is not None:
+            self._league_state.apply_updates(updates)
+
+    def _apply_sleeper_updates(self, updates):
+        try:
+            self.ui.draftBoard.cellChanged.disconnect()
+        except Exception:
+            pass
+        any_change = False
+        if "sleeper_id" not in self.draft_df.columns:
+            # Without sleeper ids we cannot map picks reliably
+            return
+        my_user_id = None
+        my_roster_id = None
+        try:
+            if SLEEPER_MY_USER_ID is not None:
+                my_user_id = str(SLEEPER_MY_USER_ID)
+            # Resolve my roster_id via league state mapping
+            if (
+                hasattr(self, "_league_state")
+                and self._league_state is not None
+                and my_user_id is not None
+            ):
+                my_roster_id = self._league_state.user_to_roster.get(my_user_id)
+        except Exception:
+            my_user_id = None
+            my_roster_id = None
+        for u in updates:
+            try:
+                mask = self.draft_df["sleeper_id"].astype(int) == int(u.sleeper_id)
+            except Exception:
+                continue
+            if not mask.any():
+                continue
+            idx = self.draft_df.index[mask][0]
+            # Mark as drafted by roster_id (store actual roster_id; 0 means undrafted)
+            try:
+                if float(self.draft_df.at[idx, "Drafted"]) == 0:
+                    # Prefer picked_by -> user_id -> roster_id mapping
+                    rid = None
+                    if getattr(u, "picked_by", ""):
+                        rid = (
+                            self._league_state.user_to_roster.get(u.picked_by)
+                            if hasattr(self, "_league_state")
+                            and self._league_state is not None
+                            else None
+                        )
+                    if rid is None and isinstance(u.roster_id, int):
+                        rid = u.roster_id
+                    if rid is None:
+                        # Fallback: mark as 0 (leave undrafted) if we cannot resolve
+                        rid = 0
+                    self.draft_df.at[idx, "Drafted"] = int(rid)
+                    any_change = True
+            except Exception:
+                rid = None
+                if (
+                    getattr(u, "picked_by", "")
+                    and hasattr(self, "_league_state")
+                    and self._league_state is not None
+                ):
+                    rid = self._league_state.user_to_roster.get(u.picked_by)
+                if rid is None and isinstance(u.roster_id, int):
+                    rid = u.roster_id
+                self.draft_df.at[idx, "Drafted"] = int(rid) if rid is not None else 0
+                any_change = True
+            if u.amount and u.amount > 0:
+                self.draft_df.at[idx, "Draft$"] = int(u.amount)
+                any_change = True
+
+        if any_change:
+            self.calc_player_price()
+            for col in ["Draft$", "Drafted", "Proj$"]:
+                self.update_draft_board_column(col)
+            self.update_my_team()
+            self.update_opt_team()
+        try:
+            self.ui.draftBoard.cellChanged.connect(self.on_draftBoardChanged)
+        except Exception:
+            pass
+
+    def _init_sleeper_league(self):
+        try:
+            self._league_state = SleeperLeagueState(SLEEPER_LEAGUE_ID, SLEEPER_DRAFT_ID)
+            self._league_state.initialize()
+        except Exception:
+            self._league_state = None
+
+    def _debug_simulate_current_state(self, n_sims: int = 50) -> None:
+        pos_map = default_position_map()
+        # Build needs/budgets from current league setup
+        n_pos = max(pos_map.values()) + 1
+        base_needs = [0] * n_pos
+        for pos, cnt in self.league_roster.items():
+            if pos in pos_map:
+                base_needs[pos_map[pos]] = int(cnt)
+        team_needs = [base_needs for _ in range(self.teams)]
+        team_budgets = [int(self.auction_budget) for _ in range(self.teams)]
+        # Arrays aligned to draft_df
+        player_ids = self.draft_df["sleeper_id"].astype(int).tolist()
+        pos_idx = (
+            self.draft_df["Position"]
+            .astype(str)
+            .apply(lambda s: pos_map.get(s.split(",")[0].strip(), -1))
+            .to_numpy(dtype=np.int32)
+        )
+        site_prices = self.draft_df["Site"].to_numpy(dtype=float)
+        hist_curve = site_prices
+        vorp_prices = compute_vorp_prices(
+            self.draft_df,
+            self.teams,
+            self.roster_size,
+            int(self.my_budget),
+            int(self.league_budget),
+        )
+        # Resolve my roster id (fallback to 0)
+        my_roster_id = None
+        if hasattr(self, "_league_state") and self._league_state is not None:
+            my_roster_id = self._league_state.user_to_roster.get(
+                str(SLEEPER_MY_USER_ID)
+            )
+        my_roster_id = 0 if my_roster_id is None else int(my_roster_id)
+
+        # Drafted mapping: 0->-1 (undrafted); 2->my roster id; 1->opponent placeholder team 0
+        ddf = self.draft_df.copy()
+        ddf["Drafted"] = ddf["Drafted"].astype(int)
+        ddf.loc[ddf["Drafted"] == 0, "Drafted"] = -1
+        ddf.loc[ddf["Drafted"] == 2, "Drafted"] = my_roster_id
+        # If "1" means drafted by someone else in the UI, remove from pool by assigning to team 0
+        ddf.loc[ddf["Drafted"] == 1, "Drafted"] = 0
+
+        ds = build_draft_state(ddf, pos_map, team_budgets, team_needs)
+
+        # Apply already drafted players (budgets/needs) so agents start from a consistent state
+        drafted_by = ddf["Drafted"].to_numpy(dtype=int)
+        draft_price = ddf["Draft$"].to_numpy(dtype=int)
+        for i, rid in enumerate(drafted_by):
+            if 0 <= rid < self.teams:
+                price_i = max(1, int(draft_price[i]))
+                ds.teams[rid].budget = int(max(0, ds.teams[rid].budget - price_i))
+                p = int(pos_idx[i])
+                if 0 <= p < ds.teams[rid].need_by_pos.shape[0]:
+                    if ds.teams[rid].need_by_pos[p] > 0:
+                        ds.teams[rid].need_by_pos[p] = int(
+                            ds.teams[rid].need_by_pos[p] - 1
+                        )
+                    else:
+                        # Try FLEX then BENCH for overflow eligibility
+                        flex_ok = p in (
+                            pos_map.get("RB", -1),
+                            pos_map.get("WR", -1),
+                            pos_map.get("TE", -1),
+                        )
+                        fidx = int(ds.flex_pos_idx)
+                        bidx = int(ds.bench_pos_idx)
+                        if (
+                            flex_ok
+                            and 0 <= fidx < ds.teams[rid].need_by_pos.shape[0]
+                            and ds.teams[rid].need_by_pos[fidx] > 0
+                        ):
+                            ds.teams[rid].need_by_pos[fidx] = int(
+                                ds.teams[rid].need_by_pos[fidx] - 1
+                            )
+                        elif (
+                            0 <= bidx < ds.teams[rid].need_by_pos.shape[0]
+                            and ds.teams[rid].need_by_pos[bidx] > 0
+                        ):
+                            ds.teams[rid].need_by_pos[bidx] = int(
+                                ds.teams[rid].need_by_pos[bidx] - 1
+                            )
+        out = run_simulation(
+            self.projection_table,
+            player_ids,
+            pos_idx,
+            site_prices,
+            hist_curve,
+            vorp_prices,
+            ds,
+            n_sims=int(n_sims),
+            seed=0,
+        )
+        owners = out.final_owner.astype(int)
+        prices = out.final_price.astype(int)
+        spend = {rid: 0 for rid in range(self.teams)}
+        pos_counts = {
+            rid: {"QB": 0, "RB": 0, "WR": 0, "TE": 0} for rid in range(self.teams)
+        }
+        for i, rid in enumerate(owners):
+            if 0 <= rid < self.teams:
+                spend[rid] += int(prices[i])
+                pos = str(self.draft_df.iloc[i]["Position"]).split(",")[0]
+                if pos in pos_counts[rid]:
+                    pos_counts[rid][pos] += 1
+        # Print out the last team's roster
+        paid = out.final_price[owners == my_roster_id]
+        last_team_roster = self.draft_df.loc[owners == my_roster_id]
+        last_team_roster["Draft$"] = paid
+        print("[Demo] last team roster:")
+        print(last_team_roster)
+        print("[Demo] price_mean head:", out.price_mean[:10])
+        print("[Demo] team spend:")
+        for rid in range(self.teams):
+            print(f"  Team {rid}: ${spend[rid]} / ${self.auction_budget}")
+        print("[Demo] my positional counts:", pos_counts.get(my_roster_id))
 
 
 def calc_player_oc(
@@ -2726,6 +3153,7 @@ def create_team_df(player_names, league_roster, draft_df, team_cols, sport):
                         (team_df.Position == pos) & (team_df["Position rank"] == rank),
                         col,
                     ] = player[col].values[0]
+
                 used_players.append(player["Name"].values[0])
 
         # Add bench players
